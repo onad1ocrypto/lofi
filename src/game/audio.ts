@@ -7,13 +7,16 @@ import {
   fillSnowFrictionSamples,
 } from './ambientAudioLogic';
 import {
+  SFX_CLIP_CONFIG,
   SFX_MIX_CONFIG,
   advanceBgmPlaylistOnEnded,
   computeActiveSfxDuck,
   computeBgmTargetVolume,
+  computeSfxClipVolume,
   createBgmPlaylistState,
   resetBgmPlaylistState,
   shouldResetBgmOnPhaseChange,
+  type SfxClipKey,
 } from './musicLogic';
 import type { GamePhase } from './types';
 
@@ -119,6 +122,14 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
   let sfxBusGain: GainNode | null = null;
   let sfxLimiter: DynamicsCompressorNode | null = null;
 
+  // Custom MP3 one-shot SFX buffers (gameOver, collectible, finish) + active playback handles
+  const sfxBuffers: Partial<Record<SfxClipKey, AudioBuffer>> = {};
+  const sfxBufferLoading: Partial<Record<SfxClipKey, boolean>> = {};
+  const activeSfxSources = new Set<AudioBufferSourceNode>();
+  const activeOutcomeSources = new Set<AudioBufferSourceNode>();
+  const activeSfxElements = new Set<HTMLAudioElement>();
+  const activeOutcomeElements = new Set<HTMLAudioElement>();
+
   // Continuous 2-track MP3 background music controller (Track 1 -> Track 2 -> Track 1 on natural ended)
   // Level completion & level transitions keep the active song playing without interrupting or resetting.
   const bgmPlaylist = createBgmPlaylistState(0);
@@ -129,6 +140,159 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
   let sfxDuckPeak = 0;
   let sfxDuckStartMs = 0;
   let sfxDuckDurationMs = 0;
+
+  const stopOutcomeSfx = () => {
+    for (const src of activeOutcomeSources) {
+      try {
+        src.stop();
+        src.disconnect();
+      } catch {
+        // Ignore already-stopped sources
+      }
+      activeSfxSources.delete(src);
+    }
+    activeOutcomeSources.clear();
+
+    for (const el of activeOutcomeElements) {
+      try {
+        el.pause();
+        el.currentTime = 0;
+      } catch {
+        // Ignore teardown errors
+      }
+      activeSfxElements.delete(el);
+    }
+    activeOutcomeElements.clear();
+  };
+
+  const stopAllClipSfx = () => {
+    stopOutcomeSfx();
+    for (const src of activeSfxSources) {
+      try {
+        src.stop();
+        src.disconnect();
+      } catch {
+        // Ignore already-stopped sources
+      }
+    }
+    activeSfxSources.clear();
+
+    for (const el of activeSfxElements) {
+      try {
+        el.pause();
+        el.currentTime = 0;
+      } catch {
+        // Ignore teardown errors
+      }
+    }
+    activeSfxElements.clear();
+  };
+
+  const preloadSfxClip = (audioCtx: AudioContext, key: SfxClipKey) => {
+    if (
+      disposed ||
+      sfxBuffers[key] ||
+      sfxBufferLoading[key] ||
+      typeof fetch === 'undefined'
+    ) {
+      return;
+    }
+    sfxBufferLoading[key] = true;
+    const { src } = SFX_CLIP_CONFIG[key];
+    fetch(src)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.arrayBuffer();
+      })
+      .then((buf) => audioCtx.decodeAudioData(buf))
+      .then((decoded) => {
+        if (!disposed) {
+          sfxBuffers[key] = decoded;
+        }
+      })
+      .catch(() => {
+        // Gracefully fall back to HTMLAudioElement playback if decode fails
+      })
+      .finally(() => {
+        sfxBufferLoading[key] = false;
+      });
+  };
+
+  const preloadAllSfxClips = (audioCtx: AudioContext) => {
+    preloadSfxClip(audioCtx, 'collectible');
+    preloadSfxClip(audioCtx, 'finish');
+    preloadSfxClip(audioCtx, 'gameOver');
+  };
+
+  const playClipSfx = (key: SfxClipKey, isOutcome: boolean) => {
+    if (muted || disposed) return;
+    unlocked = true;
+
+    const cfg = SFX_CLIP_CONFIG[key];
+    const volume = computeSfxClipVolume(key, muted);
+    if (volume <= 0.001) return;
+
+    triggerSfxDuck(cfg.duckPeak, cfg.duckDurationMs);
+    if (isOutcome) {
+      stopOutcomeSfx();
+    }
+
+    const audio = ensureSpatialGraph();
+    const dest = getOneShotDestination();
+    const decoded = sfxBuffers[key];
+
+    // Primary zero-latency Web Audio path (supports crisp overlapping pickups & compressor limiting)
+    if (audio && dest && decoded) {
+      try {
+        const src = audio.createBufferSource();
+        src.buffer = decoded;
+        const gain = audio.createGain();
+        gain.gain.setValueAtTime(volume, audio.currentTime);
+        src.connect(gain);
+        gain.connect(dest);
+
+        activeSfxSources.add(src);
+        if (isOutcome) activeOutcomeSources.add(src);
+        src.onended = () => {
+          activeSfxSources.delete(src);
+          activeOutcomeSources.delete(src);
+          try {
+            src.disconnect();
+            gain.disconnect();
+          } catch {
+            // Ignore cleanup errors
+          }
+        };
+        src.start(audio.currentTime);
+        return;
+      } catch {
+        // Fall through to HTMLAudioElement fallback
+      }
+    }
+
+    // Immediate HTMLAudioElement fallback while Web Audio buffer is still decoding
+    if (typeof Audio !== 'undefined') {
+      try {
+        const el = new Audio(cfg.src);
+        el.preload = 'auto';
+        el.muted = muted;
+        el.volume = volume;
+        activeSfxElements.add(el);
+        if (isOutcome) activeOutcomeElements.add(el);
+        const cleanup = () => {
+          activeSfxElements.delete(el);
+          activeOutcomeElements.delete(el);
+          el.removeEventListener('ended', cleanup);
+          el.removeEventListener('error', cleanup);
+        };
+        el.addEventListener('ended', cleanup);
+        el.addEventListener('error', cleanup);
+        el.play().catch(cleanup);
+      } catch {
+        // Ignore audio playback errors in headless environments
+      }
+    }
+  };
 
   const getNowMs = (): number =>
     typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -209,9 +373,18 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
     _levelNumber: number,
     avalancheDanger = 0,
   ) => {
+    const prevPhase = bgmPhase;
     bgmPhase = phase;
     bgmDanger = avalancheDanger;
     bgmInitializedOnce = true;
+
+    // Stop lingering finish/game-over clips cleanly when starting/retrying a run or returning to title
+    if (
+      (prevPhase === 'victory' || prevPhase === 'gameover') &&
+      (phase === 'playing' || phase === 'title')
+    ) {
+      stopOutcomeSfx();
+    }
 
     const activeDuck = computeActiveSfxDuck(
       getNowMs(),
@@ -424,6 +597,10 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
       }
     }
 
+    if (ctx) {
+      preloadAllSfxClips(ctx);
+    }
+
     return ctx;
   };
 
@@ -457,6 +634,7 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
       }
       if (muted) {
         silenceLoops();
+        stopAllClipSfx();
       }
       if (bgmElement) {
         bgmElement.muted = muted;
@@ -838,83 +1016,17 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
     },
 
     playRescue() {
-      if (muted) return;
-      unlocked = true;
-      const audio = ensureSpatialGraph();
-      const dest = getOneShotDestination();
-      if (!audio || !dest) return;
-      const now = audio.currentTime;
-      triggerSfxDuck(0.45, 300);
-      const notes = [587.33, 739.99, 880.0];
-      notes.forEach((freq, idx) => {
-        const osc = audio.createOscillator();
-        const gain = audio.createGain();
-        osc.type = 'triangle';
-        const start = now + idx * 0.055;
-        osc.frequency.setValueAtTime(freq, start);
-        gain.gain.setValueAtTime(0.001, start);
-        gain.gain.linearRampToValueAtTime(0.15, start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.3);
-        osc.connect(gain);
-        gain.connect(dest);
-        osc.start(start);
-        osc.stop(start + 0.32);
-      });
+      playClipSfx('collectible', false);
     },
 
     playVictory() {
       silenceLoops();
-      if (muted) return;
-      unlocked = true;
-      const audio = ensureSpatialGraph();
-      const dest = getOneShotDestination();
-      if (!audio || !dest) return;
-      const now = audio.currentTime;
-      triggerSfxDuck(0.75, 900);
-      const notes = [392.0, 493.88, 587.33, 783.99];
-      notes.forEach((freq, idx) => {
-        const osc = audio.createOscillator();
-        const gain = audio.createGain();
-        osc.type = 'triangle';
-        const start = now + idx * 0.095;
-        osc.frequency.setValueAtTime(freq, start);
-        gain.gain.setValueAtTime(0.001, start);
-        gain.gain.linearRampToValueAtTime(0.16, start + 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.58);
-        osc.connect(gain);
-        gain.connect(dest);
-        osc.start(start);
-        osc.stop(start + 0.6);
-      });
+      playClipSfx('finish', true);
     },
 
     playGameOver() {
       silenceLoops();
-      if (muted) return;
-      unlocked = true;
-      const audio = ensureSpatialGraph();
-      const dest = getOneShotDestination();
-      if (!audio || !dest) return;
-      const now = audio.currentTime;
-      triggerSfxDuck(1.0, 700);
-      const osc = audio.createOscillator();
-      const gain = audio.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(160, now);
-      osc.frequency.exponentialRampToValueAtTime(48, now + 0.55);
-
-      const filt = audio.createBiquadFilter();
-      filt.type = 'lowpass';
-      filt.frequency.value = 320;
-
-      gain.gain.setValueAtTime(0.17, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.64);
-
-      osc.connect(filt);
-      filt.connect(gain);
-      gain.connect(dest);
-      osc.start(now);
-      osc.stop(now + 0.66);
+      playClipSfx('gameOver', true);
     },
 
     silenceLoops,
@@ -922,6 +1034,10 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
     dispose() {
       disposed = true;
       silenceLoops();
+      stopAllClipSfx();
+      delete sfxBuffers.gameOver;
+      delete sfxBuffers.collectible;
+      delete sfxBuffers.finish;
 
       const stopAndDetach = (node: THREE.PositionalAudio | null) => {
         if (!node) return;

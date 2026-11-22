@@ -23,13 +23,17 @@ import {
   BGM_PLAYLIST,
   BGM_SECOND_TRACK_SRC,
   BGM_TRACK_SRC,
+  SFX_CLIP_CONFIG,
   SFX_MIX_CONFIG,
+  SFX_TRACK_SRCS,
   advanceBgmPlaylistOnEnded,
   computeActiveSfxDuck,
   computeBgmTargetVolume,
+  computeSfxClipVolume,
   createBgmPlaylistState,
   getBgmTrackIndexForLevel,
   getNextBgmTrackIndex,
+  getSfxClipConfig,
   resetBgmPlaylistState,
   shouldResetBgmOnPhaseChange,
 } from './musicLogic';
@@ -83,6 +87,7 @@ import {
   STEEP_DESCENT_CONFIG,
   computeSpeedSteerBalance,
   createSteepCameraRigState,
+  evaluateFlatZoneAt,
   evaluateSteepDescentAt,
   resetSteepCameraRigState,
   stepSteepCameraRigState,
@@ -160,6 +165,8 @@ import {
   clearKeyboardSteerTracker,
   computeDragRangePixels,
   computeDragSteerNormalized,
+  computeEdgeEscapeVelocity,
+  computeLevelSteeringProfile,
   createHeldActionKeyTracker,
   createKeyboardSteerTracker,
   pressActionKey,
@@ -4501,6 +4508,1623 @@ test('control audit: SOCD repeat immunity, multi-key Brake/Grab tracking, zero-o
     camSrc.includes('camera.position.copy(currentPos)') && camSrc.includes('camera.lookAt(currentLook)'),
     'cameraRig.ts must apply pure smoothed camera position and lookAt without jitter offsets',
   );
+});
+
+test('Level 5 — Drop & Jump: 4 Lil Yetis, short downhill, clear split, optional ramp vs safe route, sequential jumps, smooth camera, retry/next-level, and Levels 1-4 preserved', () => {
+  // 1. Levels 1-4 remain completely unchanged
+  const lv1 = LEVEL_CONFIGS[0];
+  const lv2 = LEVEL_CONFIGS[1];
+  const lv3 = LEVEL_CONFIGS[2];
+  const lv4 = LEVEL_CONFIGS[3];
+  const lv5 = LEVEL_CONFIGS[4];
+  assert.equal(lv1.name, 'Snowy Foothills');
+  assert.equal(lv1.length, 780);
+  assert.equal(lv2.name, 'Frosty Ridge');
+  assert.equal(lv2.length, 860);
+  assert.equal(lv3.name, 'Pine Valley');
+  assert.equal(lv3.length, 940);
+  assert.equal(lv3.steepDescents?.length, 1);
+  assert.equal(lv3.steepDescents?.[0].id, 'lv3-steep-drop');
+  assert.equal(lv4.name, 'Carving Pass');
+  assert.equal(lv4.length, 1020);
+  assert.equal(lv4.steepDescents?.length, 1);
+  assert.equal(lv4.steepDescents?.[0].id, 'lv4-carving-pass');
+  assert.ok(getLevelTrackProfile(4).carvingPass !== undefined, 'Level 4 carvingPass must remain intact');
+
+  // 2. Level 5 identity, 4 Lil Yetis at start, shorter/easier downhill than Level 4
+  assert.equal(lv5.name, 'Drop & Jump');
+  assert.equal(lv5.steepDescents?.length, 1);
+  const dropZone = lv5.steepDescents![0];
+  const lv4Zone = lv4.steepDescents![0];
+  assert.equal(dropZone.cameraMode, 'dropJump');
+  const lv5DropLen = dropZone.zEnd - dropZone.zStart;
+  const lv4DropLen = lv4Zone.zEnd - lv4Zone.zStart;
+  assert.ok(
+    lv5DropLen < lv4DropLen && lv5DropLen >= 60 && lv5DropLen <= 110,
+    `Level 5 downhill (${lv5DropLen}m) must be shorter than Level 4 (${lv4DropLen}m)`,
+  );
+  assert.ok(
+    dropZone.extraGradient < lv4Zone.extraGradient,
+    `Level 5 gradient (${dropZone.extraGradient}) must be gentler than Level 4 (${lv4Zone.extraGradient})`,
+  );
+
+  const sim = createInitialSimulationState('playing', undefined, 5);
+  assert.equal(sim.levelNumber, 5);
+  assert.equal(sim.followers.length, 4, 'Level 5 must start with exactly 4 Lil Yetis');
+  assert.equal(sim.ramps.length, 2, 'Level 5 must keep its 2 ramps (optional split ramp + late ramp)');
+  const optRamp = sim.ramps[0];
+  assert.equal(optRamp.id, 501);
+  assert.ok(optRamp.width >= 6.4, `Optional ramp width (${optRamp.width}m) must be forgiving`);
+  assert.ok(
+    optRamp.zStart >= dropZone.zEnd && optRamp.zStart <= dropZone.zEnd + 10,
+    'Optional ramp must begin right after the short downhill',
+  );
+
+  // 3. Layout geometry: clear split divider, unobstructed safe left lane, wide landing bowl, no sharp turn after landing
+  const splitDividerObs = sim.obstacles.filter(
+    (o) => o.z >= 546 && o.z <= 612 && Math.abs(o.offsetX) < 2.0,
+  );
+  assert.ok(
+    splitDividerObs.length >= 3,
+    `Expected visible split divider obstacles between safe and ramp lanes (got ${splitDividerObs.length})`,
+  );
+  const safeLaneObstacles = sim.obstacles.filter(
+    (o) => o.z >= 480 && o.z <= 710 && o.offsetX < -2.2,
+  );
+  assert.equal(
+    safeLaneObstacles.length,
+    0,
+    `Safe left lane beside ramp must be unobstructed (found ${safeLaneObstacles.length} obstacles)`,
+  );
+  const landingObstacles = sim.obstacles.filter(
+    (o) => o.z >= optRamp.zStart + optRamp.length && o.z <= 710 && o.offsetX > 1.5,
+  );
+  assert.equal(
+    landingObstacles.length,
+    0,
+    `Wide landing runway after ramp must be completely unobstructed (found ${landingObstacles.length})`,
+  );
+  for (let z = 590; z <= 705; z += 15) {
+    const hw = getTrackHalfWidth(z);
+    assert.ok(hw >= 18.0, `Landing & recovery area at z=${z} must be wide (got halfWidth=${hw.toFixed(1)}m)`);
+    const absSlope = Math.abs(getTrackCenterX(z + 0.5) - getTrackCenterX(z - 0.5));
+    assert.ok(
+      absSlope < 0.22,
+      `No sharp turn immediately after landing at z=${z} (got |dX/dz|=${absSlope.toFixed(3)})`,
+    );
+  }
+
+  // Helper to stage Lofi & all 4 Lil Yetis cleanly at the top of the short downhill
+  const stageBeforeDrop = (state: ReturnType<typeof createInitialSimulationState>, startZ: number, startLat: number) => {
+    state.distance = startZ;
+    state.travelDistance = startZ;
+    state.lateralOffset = startLat;
+    state.lateralVelocity = 0;
+    state.forwardSpeed = state.levelBaseSpeed;
+    state.pathHistory = [];
+    for (let d = startZ - 26; d <= startZ; d += 0.4) {
+      const wx = getTrackCenterX(d) + startLat;
+      const slopeTan = getTrackCenterX(d + 0.5) - getTrackCenterX(d - 0.5);
+      state.pathHistory.push({
+        travelDistance: d,
+        distance: d,
+        worldX: wx,
+        worldY: getTrackElevationForLevel(5, d),
+        heightAboveGround: 0,
+        jumpState: 'GROUNDED',
+        landingProgress: 0,
+        rampPitch: 0,
+        grabAmount: 0,
+        yaw: -Math.atan(slopeTan),
+        lean: 0,
+        brakeAmount: 0,
+        slopePitch: getTrackPitchAt(5, d),
+      });
+    }
+    for (let i = 0; i < state.followers.length; i++) {
+      const fd = startZ - (i + 1) * SIM_CONFIG.followerSpacing;
+      const fx = getTrackCenterX(fd) + startLat;
+      state.followers[i].distance = fd;
+      state.followers[i].worldX = fx;
+      state.followers[i].worldY = getTrackElevationForLevel(5, fd);
+      state.followers[i].heightAboveGround = 0;
+      state.followers[i].jumpState = 'GROUNDED';
+      state.followers[i].landingProgress = 0;
+      state.followers[i].rampPitch = 0;
+      state.followers[i].grabAmount = 0;
+      state.followers[i].brakeAmount = 0;
+    }
+  };
+
+  // 4. Optional Ramp Route — Lofi + all 4 Lil Yetis jump sequentially without stacking!
+  const runRampRoute = (holdBrakeOnDrop: boolean) => {
+    const s = createInitialSimulationState('playing', undefined, 5);
+    stageBeforeDrop(s, 470, optRamp.offsetX);
+    let takeoffZ = -1;
+    let touchdownZ = -1;
+    let peakHeight = 0;
+    const followerPeakHeights = [0, 0, 0, 0];
+    const followerTakeoffTimes = [-1, -1, -1, -1];
+    let minFollowerSeparation = Infinity;
+    let elapsed = 0;
+
+    for (let step = 0; step < 650 && s.distance < 710; step++) {
+      const dt = 1 / 60;
+      elapsed += dt;
+      const input = createInitialInput();
+      const latErr = optRamp.offsetX - s.lateralOffset;
+      if (s.distance < optRamp.zStart + optRamp.length) {
+        if (latErr > 0.35) input.right = true;
+        else if (latErr < -0.35) input.left = true;
+      }
+      if (holdBrakeOnDrop && s.distance >= 525 && s.distance <= 566) {
+        input.brake = true;
+      }
+      const prevJump = s.jumpState;
+      stepSimulation(s, input, dt);
+      if (prevJump !== 'AIRBORNE' && s.jumpState === 'AIRBORNE' && takeoffZ < 0) {
+        takeoffZ = s.distance;
+      }
+      if (takeoffZ > 0 && touchdownZ < 0 && s.jumpState !== 'AIRBORNE' && s.distance > takeoffZ + 4) {
+        touchdownZ = s.distance;
+      }
+      peakHeight = Math.max(peakHeight, s.heightAboveGround);
+      assert.equal(s.followers.length, 4, 'Must never lose Lil Yetis during Level 5 ramp jump');
+      for (let i = 0; i < s.followers.length; i++) {
+        const f = s.followers[i];
+        followerPeakHeights[i] = Math.max(followerPeakHeights[i], f.heightAboveGround);
+        if (followerTakeoffTimes[i] < 0 && f.jumpState === 'AIRBORNE') {
+          followerTakeoffTimes[i] = elapsed;
+        }
+      }
+      for (let i = 0; i < s.followers.length; i++) {
+        for (let j = i + 1; j < s.followers.length; j++) {
+          const dx = s.followers[i].worldX - s.followers[j].worldX;
+          const dz = s.followers[i].distance - s.followers[j].distance;
+          const sep = Math.hypot(dx, dz);
+          if (sep < minFollowerSeparation) minFollowerSeparation = sep;
+        }
+      }
+    }
+    return {
+      s,
+      takeoffZ,
+      touchdownZ,
+      jumpDist: touchdownZ - takeoffZ,
+      peakHeight,
+      followerPeakHeights,
+      followerTakeoffTimes,
+      minFollowerSeparation,
+    };
+  };
+
+  const fastJump = runRampRoute(false);
+  const brakedJump = runRampRoute(true);
+
+  assert.equal(fastJump.s.hitCount, 0, 'Unbraked optional ramp route must complete with 0 collisions');
+  assert.ok(fastJump.takeoffZ > 580 && fastJump.takeoffZ < 592, `Expected takeoff near ramp lip (got ${fastJump.takeoffZ.toFixed(1)})`);
+  assert.ok(
+    fastJump.touchdownZ > 610 && fastJump.touchdownZ < 675,
+    `Fast ramp jump must land safely inside wide landing zone (got z=${fastJump.touchdownZ.toFixed(1)})`,
+  );
+  assert.ok(
+    brakedJump.touchdownZ > 595 && brakedJump.touchdownZ < 660,
+    `Braked ramp jump must also land safely inside wide landing zone (got z=${brakedJump.touchdownZ.toFixed(1)})`,
+  );
+  assert.ok(
+    fastJump.jumpDist > brakedJump.jumpDist + 2.5,
+    `Speed must naturally affect jump distance (fast=${fastJump.jumpDist.toFixed(1)}m vs braked=${brakedJump.jumpDist.toFixed(1)}m)`,
+  );
+  assert.ok(fastJump.peakHeight > 2.2, `Lofi must achieve clear ramp air height (got ${fastJump.peakHeight.toFixed(2)}m)`);
+  for (let i = 0; i < 4; i++) {
+    assert.ok(
+      fastJump.followerPeakHeights[i] > 1.8,
+      `Lil Yeti #${i + 1} must jump over the ramp (peak=${fastJump.followerPeakHeights[i].toFixed(2)}m)`,
+    );
+    assert.ok(
+      fastJump.followerTakeoffTimes[i] > 0,
+      `Lil Yeti #${i + 1} must reach AIRBORNE state`,
+    );
+    if (i > 0) {
+      assert.ok(
+        fastJump.followerTakeoffTimes[i] > fastJump.followerTakeoffTimes[i - 1],
+        `Lil Yetis must jump sequentially one after another (#${i} t=${fastJump.followerTakeoffTimes[i - 1].toFixed(3)}s < #${i + 1} t=${fastJump.followerTakeoffTimes[i].toFixed(3)}s)`,
+      );
+    }
+  }
+  assert.ok(
+    fastJump.minFollowerSeparation >= 2.0,
+    `All 4 Lil Yetis must stay cleanly separated with zero stacking during jump (minSep=${fastJump.minFollowerSeparation.toFixed(2)}m)`,
+  );
+
+  // 5. Safe Route + Braking simulation: holding Brake while steering into safe left lane works smoothly
+  const safeSim = createInitialSimulationState('playing', undefined, 5);
+  stageBeforeDrop(safeSim, 470, 0);
+  let sawBrakingSlowdown = false;
+  let minSafeSep = Infinity;
+  for (let step = 0; step < 650 && safeSim.distance < 710; step++) {
+    const dt = 1 / 60;
+    const input = createInitialInput();
+    if (safeSim.lateralOffset > -7.2) input.left = true;
+    if (safeSim.distance >= 505 && safeSim.distance <= 560) {
+      input.brake = true;
+    }
+    stepSimulation(safeSim, input, dt);
+    if (safeSim.brakeAmount > 0.5 && safeSim.forwardSpeed < safeSim.levelBaseSpeed) {
+      sawBrakingSlowdown = true;
+    }
+    for (let i = 0; i < safeSim.followers.length; i++) {
+      for (let j = i + 1; j < safeSim.followers.length; j++) {
+        const sep = Math.hypot(
+          safeSim.followers[i].worldX - safeSim.followers[j].worldX,
+          safeSim.followers[i].distance - safeSim.followers[j].distance,
+        );
+        if (sep < minSafeSep) minSafeSep = sep;
+      }
+    }
+  }
+  assert.equal(safeSim.hitCount, 0, 'Safe left route must be cleanly navigable with 0 hits');
+  assert.equal(safeSim.followers.length, 4, 'All 4 Lil Yetis must remain on safe route');
+  assert.equal(safeSim.jumpState, 'GROUNDED', 'Safe route stays smoothly grounded beside ramp');
+  assert.ok(sawBrakingSlowdown, 'Braking must slow Lofi smoothly on Level 5');
+  assert.ok(minSafeSep >= 2.0, `Followers must not stack on safe route (minSep=${minSafeSep.toFixed(2)}m)`);
+
+  // 6. Smooth 'dropJump' camera interpolation across downhill + airborne jump + return after landing
+  const camRig = createSteepCameraRigState();
+  let prevBack = 0;
+  let prevHeight = 0;
+  let maxBackStep = 0;
+  let maxHeightStep = 0;
+  let peakJumpBack = 0;
+  let peakJumpHeight = 0;
+  for (let d = 425; d <= 725; d += 2) {
+    const jumpH = d >= 585 && d <= 625 ? Math.sin(((d - 585) / 40) * Math.PI) * 3.0 : 0;
+    const sample = evaluateSteepDescentAt(lv5.steepDescents, d);
+    stepSteepCameraRigState(camRig, sample.phase, sample.slopeFactor, false, 0.05, false, {
+      cameraMode: 'dropJump',
+      playerDistance: d,
+      playerJumpHeight: jumpH,
+      activeZone: dropZone,
+    });
+    maxBackStep = Math.max(maxBackStep, Math.abs(camRig.extraBack - prevBack));
+    maxHeightStep = Math.max(maxHeightStep, Math.abs(camRig.extraHeight - prevHeight));
+    prevBack = camRig.extraBack;
+    prevHeight = camRig.extraHeight;
+    assert.equal(camRig.curveOutsideX, 0, 'Level 5 dropJump camera must stay centered behind Lofi (no side/carving shift)');
+    if (d >= 585 && d <= 620) {
+      peakJumpBack = Math.max(peakJumpBack, camRig.extraBack);
+      peakJumpHeight = Math.max(peakJumpHeight, camRig.extraHeight);
+    }
+  }
+  assert.ok(peakJumpBack >= 2.2, `Camera must pull back smoothly during downhill & jump (got ${peakJumpBack.toFixed(2)}m)`);
+  assert.ok(peakJumpHeight >= 1.9, `Camera must raise smoothly during downhill & jump (got ${peakJumpHeight.toFixed(2)}m)`);
+  assert.ok(maxBackStep < 0.35 && maxHeightStep < 0.35, `Camera transitions must be smooth with zero sudden cuts (steps: ${maxBackStep.toFixed(3)}, ${maxHeightStep.toFixed(3)})`);
+  for (let i = 0; i < 40; i++) {
+    stepSteepCameraRigState(camRig, 'NORMAL', 0, false, 0.05, false, {
+      cameraMode: 'dropJump',
+      playerDistance: 745,
+      playerJumpHeight: 0,
+      activeZone: dropZone,
+    });
+  }
+  assert.ok(
+    camRig.extraBack < 0.05 && camRig.extraHeight < 0.05,
+    `Camera must smoothly return to normal after landing (got back=${camRig.extraBack.toFixed(3)}, h=${camRig.extraHeight.toFixed(3)})`,
+  );
+
+  // 7. Retry & Next Level (Level 5 -> Level 6) reset cleanly without duplicating course or camera state
+  const stateForReset = fastJump.s;
+  retryCurrentLevel(stateForReset);
+  assert.equal(stateForReset.levelNumber, 5);
+  assert.equal(stateForReset.followers.length, 4, 'Retry on Level 5 must keep exactly 4 Lil Yetis');
+  assert.equal(stateForReset.ramps.length, 2, 'Retry must not duplicate Level 5 ramps');
+  assert.equal(stateForReset.steepPhase, 'NORMAL', 'Retry must reset steep camera phase to NORMAL');
+  assert.equal(stateForReset.brakeAmount, 0, 'Retry must reset brakeAmount to 0');
+
+  stateForReset.distance = stateForReset.levelLength - 1;
+  stepSimulation(stateForReset, createInitialInput(), 0.1);
+  assert.equal(stateForReset.phase, 'victory');
+  advanceToNextLevel(stateForReset);
+  assert.equal(stateForReset.levelNumber, 6);
+  assert.equal(stateForReset.followers.length, 5, 'Advancing from Level 5 Victory to Level 6 must unlock 5th Lil Yeti');
+  assert.equal(stateForReset.steepPhase, 'NORMAL', 'Next Level must reset steep camera phase to NORMAL');
+  assert.equal(stateForReset.brakeAmount, 0, 'Next Level must reset brakeAmount to 0');
+});
+
+test('Level 6-10 steering audit: scaled carving authority, >=10.5m/s curve headroom, airborne carvability, snowbank peel-off, and Levels 1-5 preserved', () => {
+  // 1. Levels 1-5 preserve exact baseline steering profile unchanged
+  for (let lv = 1; lv <= 5; lv++) {
+    const p = computeLevelSteeringProfile(lv);
+    assert.equal(p.lateralAccel, 46.0, `Level ${lv} must keep baseline lateralAccel`);
+    assert.equal(p.maxLateralSpeed, 18.5, `Level ${lv} must keep baseline maxLateralSpeed`);
+    assert.equal(p.counterSteerBoost, 1.45, `Level ${lv} must keep baseline counterSteerBoost`);
+    assert.equal(p.activeDrag, 1.6, `Level ${lv} must keep baseline activeDrag`);
+  }
+
+  // 2. Levels 6-10 comfortably outpace peak switchback curve speeds on snow AND while airborne
+  for (let lv = 6; lv <= 10; lv++) {
+    const cfg = LEVEL_CONFIGS[lv - 1];
+    const m = measureLevelCurveMetrics(lv);
+    const p = computeLevelSteeringProfile(lv);
+    const maxCruise = cfg.baseSpeed + 1.6;
+    const peakCurveLatSpeed = m.peakAbsSlope * maxCruise;
+    const headroom = p.maxLateralSpeed - peakCurveLatSpeed;
+    assert.ok(
+      headroom >= 10.5,
+      `Level ${lv}: maxLateralSpeed (${p.maxLateralSpeed.toFixed(1)}) must keep >=10.5 m/s headroom over peak curve (${peakCurveLatSpeed.toFixed(2)}, got ${headroom.toFixed(2)})`,
+    );
+    const airMaxLat = p.maxLateralSpeed * p.airborneMaxLateralFactor;
+    assert.ok(
+      airMaxLat > peakCurveLatSpeed,
+      `Level ${lv}: airborne max lateral speed (${airMaxLat.toFixed(1)}) must still outpace peak curve (${peakCurveLatSpeed.toFixed(2)})`,
+    );
+  }
+
+  // 3. Snowbank edge-escape helper: never auto-turns on neutral input, peels off immediately when actively steering inward
+  assert.equal(
+    computeEdgeEscapeVelocity(0, 0, -1, 14.0, 25.0),
+    0,
+    'Neutral steer at left snowbank must never inject auto-steering velocity',
+  );
+  assert.ok(
+    computeEdgeEscapeVelocity(0, 1, -1, 14.0, 25.0) >= 13.9,
+    'Actively steering right away from left snowbank on a right bend must match curve speed immediately',
+  );
+  assert.ok(
+    computeEdgeEscapeVelocity(0, -1, 1, -14.0, 25.0) <= -13.9,
+    'Actively steering left away from right snowbank on a left bend must match curve speed immediately',
+  );
+
+  // 4. Full simulation check on Level 6 and Level 10 sharpest switchbacks: active steering carves cleanly through the bend without sticking to snowbanks
+  for (const lv of [6, 8, 10]) {
+    const s = createInitialSimulationState('playing', undefined, lv);
+    s.obstacles = [];
+    // Locate the sharpest curve point on this level
+    let steepestZ = 200;
+    let steepestAbs = 0;
+    for (let z = 180; z < s.levelLength - 180; z += 4) {
+      const slope = Math.abs(getTrackCenterX(z + 0.5) - getTrackCenterX(z - 0.5));
+      if (slope > steepestAbs) {
+        steepestAbs = slope;
+        steepestZ = z;
+      }
+    }
+    s.distance = Math.max(120, steepestZ - 45);
+    s.travelDistance = s.distance;
+    s.lateralOffset = 0;
+    s.lateralVelocity = 0;
+    s.forwardSpeed = s.levelBaseSpeed + 1.2;
+
+    let maxAbsOffset = 0;
+    let wallStuckFrames = 0;
+    for (let step = 0; step < 260 && s.distance < steepestZ + 80; step++) {
+      const inp = createInitialInput();
+      // Simple human-like steering aiming toward centerline using 16m lookahead
+      const aheadCurve = getTrackCenterX(s.distance + 16) - getTrackCenterX(s.distance);
+      const desiredLatError = aheadCurve * 0.45 - s.lateralOffset;
+      if (desiredLatError > 0.6) inp.right = true;
+      else if (desiredLatError < -0.6) inp.left = true;
+      stepSimulation(s, inp, 1 / 60);
+      maxAbsOffset = Math.max(maxAbsOffset, Math.abs(s.lateralOffset));
+      const hw = getTrackHalfWidth(s.distance) - SIM_CONFIG.edgePadding;
+      if (Math.abs(s.lateralOffset) >= hw - 0.05) {
+        wallStuckFrames += 1;
+      }
+    }
+    assert.equal(
+      wallStuckFrames,
+      0,
+      `Level ${lv}: active steering through sharpest switchback (z=${steepestZ}) must carve cleanly without ever hitting the snowbank wall (maxOffset=${maxAbsOffset.toFixed(2)}m)`,
+    );
+  }
+});
+
+test('Level 6 — Pine Slalom: 5 Lil Yetis, deterministic zig-zag pine gates, wide safe routes, gentle slope, braking balance, smooth camera, retry/next-level, and Levels 1-5 preserved', () => {
+  // 1. Levels 1-5 remain completely unchanged
+  assert.equal(LEVEL_CONFIGS[0].name, 'Snowy Foothills');
+  assert.equal(LEVEL_CONFIGS[1].name, 'Frosty Ridge');
+  assert.equal(LEVEL_CONFIGS[2].name, 'Pine Valley');
+  assert.equal(LEVEL_CONFIGS[3].name, 'Carving Pass');
+  assert.equal(LEVEL_CONFIGS[4].name, 'Drop & Jump');
+  assert.equal(LEVEL_CONFIGS[4].steepDescents?.[0].id, 'lv5-drop-jump');
+
+  // 2. Level 6 identity, 5 Lil Yetis, mostly flat / gently sloping slalom zone with no steep-drop warning
+  const lv6 = LEVEL_CONFIGS[5];
+  assert.equal(lv6.name, 'Pine Slalom');
+  assert.equal(lv6.steepDescents?.length, 1);
+  const slalomZone = lv6.steepDescents![0];
+  assert.equal(slalomZone.id, 'lv6-pine-slalom');
+  assert.equal(slalomZone.cameraMode, 'slalom');
+  assert.ok(slalomZone.extraGradient <= 0.04, `Slalom slope must be mostly flat/gentle (got ${slalomZone.extraGradient})`);
+  assert.equal(
+    evaluateSteepDescentAt(lv6.steepDescents, slalomZone.zStart - 10).warningActive,
+    false,
+    'Flat Pine Slalom must not show a steep-drop brake warning',
+  );
+
+  const sim = createInitialSimulationState('playing', undefined, 6);
+  assert.equal(sim.levelNumber, 6);
+  assert.equal(sim.followers.length, 5, 'Level 6 must start with exactly 5 Lil Yetis');
+
+  // 3. Deterministic zig-zag pine gates (no random trees inside slalom z=420..660 or recovery z=660..760)
+  const slalomObstacles = sim.obstacles.filter((o) => o.z >= 418 && o.z <= 662);
+  assert.equal(
+    slalomObstacles.length,
+    18,
+    `Pine Slalom must contain only the 18 deterministic zig-zag pines (no random trees, got ${slalomObstacles.length})`,
+  );
+  assert.ok(
+    slalomObstacles.every((o) => o.kind === 'pine'),
+    'All obstacles inside Pine Slalom must be pine trees',
+  );
+  const recoveryObstacles = sim.obstacles.filter((o) => o.z > 662 && o.z <= 758);
+  assert.equal(
+    recoveryObstacles.length,
+    0,
+    `Recovery area after Pine Slalom must be completely obstacle-free (found ${recoveryObstacles.length})`,
+  );
+
+  // Verify every zig-zag gate leaves its alternating safe lane >= 10m wide & unobstructed
+  const gateCenters = [
+    { z: 451, safeSide: 1 },
+    { z: 491, safeSide: -1 },
+    { z: 531, safeSide: 1 },
+    { z: 571, safeSide: -1 },
+    { z: 611, safeSide: 1 },
+    { z: 651, safeSide: -1 },
+  ] as const;
+  for (const gate of gateCenters) {
+    const gateObs = slalomObstacles.filter((o) => Math.abs(o.z - gate.z) <= 8);
+    assert.equal(gateObs.length, 3, `Expected 3 barrier pines at gate z=${gate.z}`);
+    // All barrier pines must sit strictly on the blocked side, leaving the safe side 100% open
+    for (const pine of gateObs) {
+      assert.ok(
+        pine.offsetX * gate.safeSide < -1.0,
+        `Gate z=${gate.z} pine at x=${pine.offsetX.toFixed(1)} must never encroach on safe side (${gate.safeSide > 0 ? 'RIGHT' : 'LEFT'})`,
+      );
+    }
+    const usableHalfW = getTrackHalfWidth(gate.z) - SIM_CONFIG.edgePadding;
+    assert.ok(
+      usableHalfW >= 12.0,
+      `Slalom width at gate z=${gate.z} must provide a wide readable safe route (usableHalfW=${usableHalfW.toFixed(1)}m)`,
+    );
+  }
+
+  // No sharp turn immediately after the recovery area (z = 660..810)
+  for (let z = 660; z <= 810; z += 15) {
+    const absSlope = Math.abs(getTrackCenterX(z + 0.5) - getTrackCenterX(z - 0.5));
+    assert.ok(
+      absSlope < 0.2,
+      `No sharp turn immediately after recovery at z=${z} (got |dX/dz|=${absSlope.toFixed(3)})`,
+    );
+  }
+
+  // Helper to stage Lofi & all 5 Lil Yetis right before the Pine Slalom
+  const stageBeforeSlalom = (state: ReturnType<typeof createInitialSimulationState>, startZ = 402) => {
+    state.distance = startZ;
+    state.travelDistance = startZ;
+    state.lateralOffset = 0;
+    state.lateralVelocity = 0;
+    state.forwardSpeed = state.levelBaseSpeed;
+    state.avalancheDistance = SIM_CONFIG.avalancheStartDistance;
+    state.pathHistory = [];
+    for (let d = startZ - 30; d <= startZ; d += 0.4) {
+      const wx = getTrackCenterX(d);
+      const slopeTan = getTrackCenterX(d + 0.5) - getTrackCenterX(d - 0.5);
+      state.pathHistory.push({
+        travelDistance: d,
+        distance: d,
+        worldX: wx,
+        worldY: getTrackElevationForLevel(6, d),
+        heightAboveGround: 0,
+        jumpState: 'GROUNDED',
+        landingProgress: 0,
+        rampPitch: 0,
+        grabAmount: 0,
+        yaw: -Math.atan(slopeTan),
+        lean: 0,
+        brakeAmount: 0,
+        slopePitch: getTrackPitchAt(6, d),
+      });
+    }
+    for (let i = 0; i < state.followers.length; i++) {
+      const fd = startZ - (i + 1) * SIM_CONFIG.followerSpacing;
+      const fx = getTrackCenterX(fd);
+      state.followers[i].distance = fd;
+      state.followers[i].worldX = fx;
+      state.followers[i].worldY = getTrackElevationForLevel(6, fd);
+      state.followers[i].heightAboveGround = 0;
+      state.followers[i].jumpState = 'GROUNDED';
+      state.followers[i].brakeAmount = 0;
+    }
+  };
+
+  // Smooth zig-zag target line through the 6 alternating safe lanes
+  const targetOffsetAt = (z: number): number => {
+    if (z < 466) return 6.2; // Gate 1 RIGHT
+    if (z < 506) return -6.2; // Gate 2 LEFT
+    if (z < 546) return 6.2; // Gate 3 RIGHT
+    if (z < 586) return -6.2; // Gate 4 LEFT
+    if (z < 626) return 6.2; // Gate 5 RIGHT
+    if (z < 668) return -6.2; // Gate 6 LEFT
+    return 0; // Center smoothly in recovery area
+  };
+
+  // 4. Full Pine Slalom run: Lofi + all 5 Lil Yetis carve through all 6 gates with optional short braking
+  const runSlalom = (brakeMode: 'none' | 'short' | 'excessive') => {
+    const s = createInitialSimulationState('playing', undefined, 6);
+    stageBeforeSlalom(s, 402);
+    const followerBraked = [false, false, false, false, false];
+    let minFollowerSep = Infinity;
+    let maxLag = 0;
+    for (let step = 0; step < 1100 && s.distance < 720 && s.phase === 'playing'; step++) {
+      const dt = 1 / 60;
+      const inp = createInitialInput();
+      const targetX = targetOffsetAt(s.distance + 10);
+      const err = targetX - s.lateralOffset;
+      if (err > 0.55) inp.right = true;
+      else if (err < -0.55) inp.left = true;
+      if (brakeMode === 'short' && s.distance >= 472 && s.distance <= 502) {
+        inp.brake = true;
+      } else if (brakeMode === 'excessive' && s.distance >= 425 && s.distance <= 620) {
+        inp.brake = true;
+      }
+      stepSimulation(s, inp, dt);
+      assert.equal(s.followers.length, 5, 'Must never lose Lil Yetis during Level 6 Pine Slalom');
+      for (let i = 0; i < 5; i++) {
+        if (s.followers[i].brakeAmount > 0.25) followerBraked[i] = true;
+        maxLag = Math.max(maxLag, s.distance - s.followers[i].distance);
+        for (let j = i + 1; j < 5; j++) {
+          const sep = Math.hypot(
+            s.followers[i].worldX - s.followers[j].worldX,
+            s.followers[i].distance - s.followers[j].distance,
+          );
+          if (sep < minFollowerSep) minFollowerSep = sep;
+        }
+      }
+    }
+    return { s, followerBraked, minFollowerSep, maxLag };
+  };
+
+  const noBrakeRun = runSlalom('none');
+  const shortBrakeRun = runSlalom('short');
+  const excessiveBrakeRun = runSlalom('excessive');
+
+  assert.equal(noBrakeRun.s.hitCount, 0, 'Pine Slalom must be cleanly completable without requiring continuous braking');
+  assert.equal(noBrakeRun.s.phase, 'playing');
+  assert.ok(noBrakeRun.s.distance >= 718, 'Lofi must complete the slalom into the recovery area without braking');
+  assert.ok(
+    noBrakeRun.s.followers.every((f) => f.distance > 685),
+    'All 5 Lil Yetis must complete the slalom cleanly behind Lofi',
+  );
+
+  assert.equal(shortBrakeRun.s.hitCount, 0, 'Short tactical braking slalom run must complete with 0 hits');
+  assert.deepEqual(
+    shortBrakeRun.followerBraked,
+    [true, true, true, true, true],
+    'All 5 Lil Yetis must mimic braking on the same slalom section',
+  );
+  assert.ok(
+    shortBrakeRun.minFollowerSep >= 2.0,
+    `All 5 Lil Yetis must stay separated without colliding/stacking (minSep=${shortBrakeRun.minFollowerSep.toFixed(2)}m)`,
+  );
+  assert.ok(
+    shortBrakeRun.maxLag < 17.5,
+    `All 5 Lil Yetis must stay close behind Lofi without falling behind (maxLag=${shortBrakeRun.maxLag.toFixed(2)}m)`,
+  );
+  assert.ok(
+    excessiveBrakeRun.s.avalancheDistance < noBrakeRun.s.avalancheDistance - 8.0,
+    `Excessive braking must let the avalanche close in noticeably (excessive=${excessiveBrakeRun.s.avalancheDistance.toFixed(1)}m vs noBrake=${noBrakeRun.s.avalancheDistance.toFixed(1)}m)`,
+  );
+
+  // 5. Smooth 'slalom' camera: raises & pulls back gently, stays centered behind Lofi, returns cleanly after slalom
+  const camRig = createSteepCameraRigState();
+  let prevBack = 0;
+  let prevHeight = 0;
+  let maxBackStep = 0;
+  let maxHeightStep = 0;
+  let peakBack = 0;
+  let peakHeight = 0;
+  for (let d = 360; d <= 770; d += 2) {
+    const sample = evaluateSteepDescentAt(lv6.steepDescents, d);
+    stepSteepCameraRigState(camRig, sample.phase, sample.slopeFactor, false, 0.05, false, {
+      cameraMode: 'slalom',
+      playerDistance: d,
+      activeZone: slalomZone,
+    });
+    maxBackStep = Math.max(maxBackStep, Math.abs(camRig.extraBack - prevBack));
+    maxHeightStep = Math.max(maxHeightStep, Math.abs(camRig.extraHeight - prevHeight));
+    prevBack = camRig.extraBack;
+    prevHeight = camRig.extraHeight;
+    assert.equal(camRig.curveOutsideX, 0, 'Level 6 slalom camera must stay strictly behind Lofi');
+    peakBack = Math.max(peakBack, camRig.extraBack);
+    peakHeight = Math.max(peakHeight, camRig.extraHeight);
+  }
+  assert.ok(peakBack >= 2.2, `Slalom camera must pull back smoothly (got ${peakBack.toFixed(2)}m)`);
+  assert.ok(peakHeight >= 2.2, `Slalom camera must raise smoothly (got ${peakHeight.toFixed(2)}m)`);
+  assert.ok(
+    maxBackStep < 0.35 && maxHeightStep < 0.35,
+    `Slalom camera must interpolate smoothly without sudden cuts (steps: ${maxBackStep.toFixed(3)}, ${maxHeightStep.toFixed(3)})`,
+  );
+  for (let i = 0; i < 40; i++) {
+    stepSteepCameraRigState(camRig, 'NORMAL', 0, false, 0.05, false, {
+      cameraMode: 'slalom',
+      playerDistance: 800,
+      activeZone: slalomZone,
+    });
+  }
+  assert.ok(
+    camRig.extraBack < 0.05 && camRig.extraHeight < 0.05,
+    `Slalom camera must smoothly return to normal after recovery (back=${camRig.extraBack.toFixed(3)}, h=${camRig.extraHeight.toFixed(3)})`,
+  );
+
+  // 6. Retry & Next Level (Level 6 -> Level 7) reset cleanly with zero course or camera duplication
+  const resetState = shortBrakeRun.s;
+  retryCurrentLevel(resetState);
+  assert.equal(resetState.levelNumber, 6);
+  assert.equal(resetState.followers.length, 5, 'Retry on Level 6 must keep exactly 5 Lil Yetis');
+  assert.equal(resetState.ramps.length, 2, 'Retry must not duplicate Level 6 ramps');
+  assert.equal(
+    resetState.obstacles.filter((o) => o.z >= 418 && o.z <= 662).length,
+    18,
+    'Retry must not duplicate slalom pine trees',
+  );
+  assert.equal(resetState.steepPhase, 'NORMAL', 'Retry must reset camera phase to NORMAL');
+  assert.equal(resetState.brakeAmount, 0, 'Retry must reset brakeAmount to 0');
+
+  resetState.distance = resetState.levelLength - 1;
+  stepSimulation(resetState, createInitialInput(), 0.1);
+  assert.equal(resetState.phase, 'victory');
+  advanceToNextLevel(resetState);
+  assert.equal(resetState.levelNumber, 7);
+  assert.equal(resetState.followers.length, 6, 'Next Level after Level 6 Victory must start Level 7 with 6 Lil Yetis');
+  assert.equal(resetState.steepPhase, 'NORMAL');
+  assert.equal(resetState.brakeAmount, 0);
+});
+
+test('custom MP3 SFX mapping: gameOver, road collectible pickup, and finish fanfare resolve to valid local assets and respect mute/mix rules', () => {
+  // 1. Exact mappings requested by user
+  assert.equal(
+    SFX_TRACK_SRCS.gameOver,
+    '/assets/aistudio/freesound_community-negative_beeps-6008_1ac25b4a.mp3',
+  );
+  assert.equal(
+    SFX_TRACK_SRCS.collectible,
+    '/assets/aistudio/universfield-video-game-bonus-323603_d5dfb245.mp3',
+  );
+  assert.equal(
+    SFX_TRACK_SRCS.finish,
+    '/assets/aistudio/freesound_community-tada-fanfare-a-6313_5fa556d6.mp3',
+  );
+
+  // 2. Every SFX file exists in public/ and is a non-empty MP3 asset
+  const keys = ['gameOver', 'collectible', 'finish'] as const;
+  for (const key of keys) {
+    const cfg = getSfxClipConfig(key);
+    assert.equal(cfg.src, SFX_CLIP_CONFIG[key].src);
+    assert.ok(cfg.src.endsWith('.mp3'), `${key} SFX must be an MP3 asset`);
+    const diskPath = path.resolve(process.cwd(), 'public', cfg.src.replace(/^\//, ''));
+    assert.ok(fs.existsSync(diskPath), `Missing SFX asset on disk: ${diskPath}`);
+    const stats = fs.statSync(diskPath);
+    assert.ok(stats.size > 1000, `SFX asset ${key} appears empty (${stats.size} bytes)`);
+
+    // Unmuted gain is balanced in (0.4..0.9], muted is strictly 0
+    const unmutedVol = computeSfxClipVolume(key, false);
+    assert.ok(unmutedVol > 0.4 && unmutedVol <= 0.9, `Unexpected gain for ${key}: ${unmutedVol}`);
+    assert.equal(computeSfxClipVolume(key, true), 0, `${key} SFX must silence when muted`);
+    assert.ok(cfg.duckDurationMs >= 300, `${key} duck window should be >= 300ms`);
+  }
+
+  // 3. Existing 2-track continuous BGM playlist remains untouched
+  assert.equal(BGM_PLAYLIST.length, 2);
+  assert.equal(BGM_PLAYLIST[0].src, BGM_TRACK_SRC);
+  assert.equal(BGM_PLAYLIST[1].src, BGM_SECOND_TRACK_SRC);
+});
+
+test('Level 7 — Avalanche Alley: 6 Lil Yetis, downhill-flat-downhill rhythm, natural flat speed decay, fair avalanche pressure, smooth rear camera, retry/next-level, and Levels 1-6 preserved', () => {
+  // 1. Levels 1-6 remain completely unchanged
+  assert.equal(LEVEL_CONFIGS[0].name, 'Snowy Foothills');
+  assert.equal(LEVEL_CONFIGS[1].name, 'Frosty Ridge');
+  assert.equal(LEVEL_CONFIGS[2].name, 'Pine Valley');
+  assert.equal(LEVEL_CONFIGS[3].name, 'Carving Pass');
+  assert.equal(LEVEL_CONFIGS[4].name, 'Drop & Jump');
+  assert.equal(LEVEL_CONFIGS[5].name, 'Pine Slalom');
+  assert.equal(LEVEL_CONFIGS[5].steepDescents?.[0].id, 'lv6-pine-slalom');
+
+  // 2. Level 7 identity, 6 Lil Yetis, and two downhills separated by a flat momentum section
+  const lv7 = LEVEL_CONFIGS[6];
+  assert.equal(lv7.name, 'Avalanche Alley');
+  assert.equal(lv7.steepDescents?.length, 2, 'Level 7 must define 2 downhill sections');
+  assert.equal(lv7.flatZones?.length, 1, 'Level 7 must define 1 flat momentum section between the downhills');
+
+  const drop1 = lv7.steepDescents![0];
+  const drop2 = lv7.steepDescents![1];
+  const flat = lv7.flatZones![0];
+  assert.equal(drop1.id, 'lv7-alley-drop-1');
+  assert.equal(drop2.id, 'lv7-alley-drop-2');
+  assert.equal(flat.id, 'lv7-alley-flat');
+  assert.equal(drop1.cameraMode, 'alley');
+  assert.equal(drop2.cameraMode, 'alley');
+
+  // Sequence order: Downhill 1 -> Flat section -> Longer Downhill 2 -> Wide recovery before shelter
+  assert.ok(drop1.zEnd < flat.zStart + 20 && flat.zEnd < drop2.zStart + 10);
+  const drop1Len = drop1.zEnd - drop1.zStart;
+  const drop2Len = drop2.zEnd - drop2.zStart;
+  const flatLen = flat.zEnd - flat.zStart;
+  assert.ok(drop2Len > drop1Len, `Second downhill (${drop2Len}m) must be longer than first (${drop1Len}m)`);
+  assert.ok(flatLen >= 200, `Flat section (${flatLen}m) must be long enough to lose speed naturally`);
+  assert.ok(lv7.length - drop2.zEnd >= 300, 'Wide recovery area before shelter must be generous');
+
+  // Pitch verification: Downhill 1 & 2 steeper than base, Flat visibly flatter than base
+  const basePitch = Math.atan(SLOPE_GRADIENT);
+  const drop1MidPitch = Math.abs(getTrackPitchAt(7, (drop1.zStart + drop1.zEnd) * 0.5));
+  const flatMidPitch = Math.abs(getTrackPitchAt(7, (flat.zStart + flat.zEnd) * 0.5));
+  const drop2MidPitch = Math.abs(getTrackPitchAt(7, (drop2.zStart + drop2.zEnd) * 0.5));
+  assert.ok(drop1MidPitch > basePitch + 0.14, `Downhill 1 must be visibly downhill (${drop1MidPitch.toFixed(3)})`);
+  assert.ok(flatMidPitch < basePitch * 0.35, `Flat section must be visibly flat (${flatMidPitch.toFixed(3)} vs base ${basePitch.toFixed(3)})`);
+  assert.ok(drop2MidPitch > basePitch + 0.16, `Downhill 2 must be visibly downhill (${drop2MidPitch.toFixed(3)})`);
+  assert.equal(evaluateFlatZoneAt(lv7.flatZones, (flat.zStart + flat.zEnd) * 0.5).active, true);
+
+  // Elevation continuity (no cliffs, gaps, or vertical kinks across entire Level 7)
+  setActiveTrackProfile(7);
+  for (let z = 0; z < lv7.length; z += 4) {
+    const dy = getTrackElevationForLevel(7, z + 4) - getTrackElevationForLevel(7, z);
+    assert.ok(dy <= 0.35 && dy >= -2.5, `Level 7 elevation must stay smooth without cliffs/gaps at z=${z} (dy=${dy.toFixed(3)})`);
+  }
+
+  // No sharp turns immediately after either landing (Landing 1: 460..540, Landing 2: 916..1060)
+  for (let z = 460; z <= 540; z += 16) {
+    const absSlope = Math.abs(getTrackCenterX(z + 0.5) - getTrackCenterX(z - 0.5));
+    assert.ok(absSlope < 0.24, `No sharp turn immediately after Landing 1 at z=${z} (|dX/dz|=${absSlope.toFixed(3)})`);
+  }
+  for (let z = 916; z <= 1060; z += 16) {
+    const absSlope = Math.abs(getTrackCenterX(z + 0.5) - getTrackCenterX(z - 0.5));
+    assert.ok(absSlope < 0.24, `No sharp turn immediately after Landing 2 at z=${z} (|dX/dz|=${absSlope.toFixed(3)})`);
+  }
+
+  // Starts with exactly 6 Lil Yetis & wide recovery area before shelter is obstacle-free
+  const sim = createInitialSimulationState('playing', undefined, 7);
+  assert.equal(sim.levelNumber, 7);
+  assert.equal(sim.followers.length, 6, 'Level 7 must start with exactly 6 Lil Yetis');
+  const recoveryObs = sim.obstacles.filter((o) => o.z >= 916 && o.z <= 1140);
+  assert.equal(
+    recoveryObs.length,
+    0,
+    `Wide recovery area after Downhill 2 must stay completely clear (found ${recoveryObs.length})`,
+  );
+
+  // 3. Full Level 7 rhythm simulations: balanced vs excessive flat braking vs unbraked overspeed
+  const runAlley = (mode: 'balanced' | 'overbrakeFlat' | 'noBrake') => {
+    const s = createInitialSimulationState('playing', undefined, 7);
+    const dt = 1 / 60;
+    let flatEntrySpeed = 0;
+    let flatMinSpeed = Infinity;
+    let maxDrop2Speed = 0;
+    let minSteerMultOnDrop2 = 1;
+    let maxOverspeedOnDrop2 = 0;
+    let minAvalancheDist = s.avalancheDistance;
+    let minFollowerGap = Infinity;
+    let maxFollowerBrake = 0;
+
+    for (let step = 0; step < 3600 && s.phase === 'playing'; step++) {
+      // Pick the clearest visible safe lane ahead among [-5.5, -3, 0, 3, 5.5]
+      const candidates = [0, -3.2, 3.2, -5.8, 5.8];
+      let targetLat = 0;
+      let bestScore = -Infinity;
+      for (const cand of candidates) {
+        let minClear = 20;
+        for (const obs of s.obstacles) {
+          const dz = obs.z - s.distance;
+          if (dz > -1.5 && dz < 42) {
+            const latGap = Math.abs(obs.offsetX - cand) - obs.radius;
+            const weightedGap = latGap + (dz / 42) * 1.4;
+            if (weightedGap < minClear) minClear = weightedGap;
+          }
+        }
+        const score = minClear - Math.abs(cand) * 0.06;
+        if (score > bestScore) {
+          bestScore = score;
+          targetLat = cand;
+        }
+      }
+      const slopeAhead = getTrackCenterX(s.distance + 4) - getTrackCenterX(s.distance);
+      const desiredWorldLatVel =
+        (targetLat - s.lateralOffset) * 3.4 + (slopeAhead / 4) * s.forwardSpeed;
+      const input = createInitialInput();
+      if (desiredWorldLatVel - s.lateralVelocity > 0.5) input.right = true;
+      else if (desiredWorldLatVel - s.lateralVelocity < -0.5) input.left = true;
+
+      const onDrop1 = s.distance >= drop1.zStart + 18 && s.distance <= drop1.zEnd - 12;
+      const onFlat = s.distance >= flat.zStart + 10 && s.distance <= flat.zEnd - 10;
+      const onDrop2 = s.distance >= drop2.zStart + 20 && s.distance <= drop2.zEnd - 14;
+
+      if (mode === 'balanced') {
+        // Brake moderately on downhills (pulse/cap speed cleanly), NEVER brake on flat section
+        input.brake = (onDrop1 || onDrop2) && s.forwardSpeed > s.levelBaseSpeed + 1.5;
+      } else if (mode === 'overbrakeFlat') {
+        // Hold brake excessively across the flat section (creates real avalanche pressure)
+        input.brake = onFlat || (onDrop1 && s.forwardSpeed > s.levelBaseSpeed - 4);
+      } else {
+        input.brake = false;
+      }
+
+      stepSimulation(s, input, dt);
+
+      if (s.distance >= flat.zStart && flatEntrySpeed === 0) {
+        flatEntrySpeed = s.forwardSpeed;
+      }
+      if (s.distance >= flat.zStart + 20 && s.distance <= flat.zEnd - 10) {
+        flatMinSpeed = Math.min(flatMinSpeed, s.forwardSpeed);
+      }
+      if (s.distance >= drop2.zStart + 30 && s.distance <= drop2.zEnd) {
+        maxDrop2Speed = Math.max(maxDrop2Speed, s.forwardSpeed);
+        const bal = computeSpeedSteerBalance(
+          s.forwardSpeed,
+          s.levelBaseSpeed,
+          s.brakeAmount,
+          s.jumpState === 'AIRBORNE',
+        );
+        minSteerMultOnDrop2 = Math.min(minSteerMultOnDrop2, bal.steerAccelMult);
+        maxOverspeedOnDrop2 = Math.max(maxOverspeedOnDrop2, bal.overspeedRatio);
+      }
+
+      minAvalancheDist = Math.min(minAvalancheDist, s.avalancheDistance);
+      const lofiWorldX = getTrackCenterX(s.distance) + s.lateralOffset;
+      for (let i = 0; i < s.followers.length; i++) {
+        maxFollowerBrake = Math.max(maxFollowerBrake, s.followers[i].brakeAmount);
+        const leadDist = i === 0 ? s.distance : s.followers[i - 1].distance;
+        const leadX = i === 0 ? lofiWorldX : s.followers[i - 1].worldX;
+        const gap = Math.hypot(leadX - s.followers[i].worldX, leadDist - s.followers[i].distance);
+        minFollowerGap = Math.min(minFollowerGap, gap);
+      }
+    }
+
+    return {
+      s,
+      flatEntrySpeed,
+      flatMinSpeed,
+      maxDrop2Speed,
+      minSteerMultOnDrop2,
+      maxOverspeedOnDrop2,
+      minAvalancheDist,
+      minFollowerGap,
+      maxFollowerBrake,
+    };
+  };
+
+  const balanced = runAlley('balanced');
+  assert.equal(balanced.s.phase, 'victory', 'Balanced rhythm run must safely complete Level 7');
+  assert.equal(balanced.s.hitCount, 0, 'Balanced run must clear sparse Level 7 obstacles with 0 hits');
+  assert.equal(balanced.s.followers.length, 6, 'All 6 Lil Yetis must remain with Lofi through finish');
+  assert.ok(
+    balanced.flatEntrySpeed - balanced.flatMinSpeed >= 2.2,
+    `Flat section must naturally bleed speed (entry=${balanced.flatEntrySpeed.toFixed(1)}, min=${balanced.flatMinSpeed.toFixed(1)})`,
+  );
+  assert.ok(
+    balanced.minAvalancheDist >= 10.0,
+    `Balanced rhythm run must keep fair avalanche clearance (minDist=${balanced.minAvalancheDist.toFixed(1)}m)`,
+  );
+  assert.ok(
+    balanced.minFollowerGap >= 2.0,
+    `All 6 Lil Yetis must stay cleanly separated without stacking (minGap=${balanced.minFollowerGap.toFixed(2)}m)`,
+  );
+  assert.ok(
+    balanced.maxFollowerBrake >= 0.4,
+    `Lil Yetis must mimic braking on downhill sections (maxFollowerBrake=${balanced.maxFollowerBrake.toFixed(2)})`,
+  );
+
+  const overbrakeFlat = runAlley('overbrakeFlat');
+  assert.ok(
+    overbrakeFlat.minAvalancheDist < balanced.minAvalancheDist - 8.0,
+    `Excessive braking on the flat section must create strong avalanche pressure (overbrake=${overbrakeFlat.minAvalancheDist.toFixed(1)}m vs balanced=${balanced.minAvalancheDist.toFixed(1)}m)`,
+  );
+
+  const noBrake = runAlley('noBrake');
+  assert.ok(
+    noBrake.maxDrop2Speed > lv7.baseSpeed + 8.0,
+    `Skipping brakes on Downhill 2 must build high speed (got ${noBrake.maxDrop2Speed.toFixed(1)} m/s)`,
+  );
+  assert.ok(
+    noBrake.maxOverspeedOnDrop2 >= 0.65 && noBrake.minSteerMultOnDrop2 <= 0.76,
+    `Excessive unbraked speed on Downhill 2 must make steering harder (overspeed=${noBrake.maxOverspeedOnDrop2.toFixed(2)}, steerMult=${noBrake.minSteerMultOnDrop2.toFixed(2)})`,
+  );
+
+  // 4. Camera smoothness across Downhill 1 -> NORMAL Flat -> Downhill 2 -> NORMAL Recovery/Shelter
+  const camRig = createSteepCameraRigState();
+  let peakDrop1Back = 0;
+  let flatCenterBack = 99;
+  let peakDrop2Back = 0;
+  let maxFrameJump = 0;
+  let prevBack = 0;
+  let prevHeight = 0;
+
+  for (let z = 250; z <= 1150; z += 0.48) {
+    const sample = evaluateSteepDescentAt(lv7.steepDescents, z);
+    stepSteepCameraRigState(camRig, sample.phase, sample.slopeFactor, false, 1 / 60, false, {
+      cameraMode: sample.zone?.cameraMode ?? 'alley',
+      playerDistance: z,
+      activeZone: sample.zone ?? undefined,
+    });
+    const jump = Math.hypot(camRig.extraBack - prevBack, camRig.extraHeight - prevHeight);
+    maxFrameJump = Math.max(maxFrameJump, jump);
+    prevBack = camRig.extraBack;
+    prevHeight = camRig.extraHeight;
+
+    assert.equal(camRig.curveOutsideX, 0, 'Level 7 rear camera must never shift into a side camera');
+    if (z >= drop1.zStart + 30 && z <= drop1.zEnd) {
+      peakDrop1Back = Math.max(peakDrop1Back, camRig.extraBack);
+    }
+    if (z >= 620 && z <= 660) {
+      flatCenterBack = Math.min(flatCenterBack, camRig.extraBack);
+    }
+    if (z >= drop2.zStart + 40 && z <= drop2.zEnd) {
+      peakDrop2Back = Math.max(peakDrop2Back, camRig.extraBack);
+    }
+  }
+  assert.ok(peakDrop1Back >= 2.2, `Camera must smoothly pull back on Downhill 1 (got ${peakDrop1Back.toFixed(2)})`);
+  assert.ok(flatCenterBack < 0.08, `Camera must smoothly return to normal on flat section (got ${flatCenterBack.toFixed(3)})`);
+  assert.ok(peakDrop2Back >= 2.4, `Camera must smoothly pull back on Downhill 2 (got ${peakDrop2Back.toFixed(2)})`);
+  assert.ok(camRig.extraBack < 0.05 && camRig.extraHeight < 0.05, 'Camera must return to normal after Downhill 2');
+  assert.ok(maxFrameJump < 0.25, `Camera transitions must be smooth with zero sudden cuts (maxJump=${maxFrameJump.toFixed(3)})`);
+
+  // 5. Retry & Next Level (Level 7 -> Level 8) reset cleanly with zero course or camera duplication
+  const resetState = balanced.s;
+  const obsCountBefore = resetState.obstacles.length;
+  retryCurrentLevel(resetState);
+  assert.equal(resetState.levelNumber, 7);
+  assert.equal(resetState.followers.length, 6, 'Retry on Level 7 must preserve exactly 6 Lil Yetis');
+  assert.equal(resetState.obstacles.length, obsCountBefore, 'Retry must not duplicate Level 7 obstacles');
+  assert.equal(resetState.steepPhase, 'NORMAL', 'Retry must reset steepPhase to NORMAL');
+  assert.equal(resetState.brakeAmount, 0, 'Retry must reset brakeAmount to 0');
+
+  resetState.distance = resetState.levelLength - 1;
+  stepSimulation(resetState, createInitialInput(), 0.1);
+  assert.equal(resetState.phase, 'victory');
+  advanceToNextLevel(resetState);
+  assert.equal(resetState.levelNumber, 8);
+  assert.equal(resetState.followers.length, 7, 'Next Level after Level 7 Victory must start Level 8 with 7 Lil Yetis');
+  assert.equal(resetState.steepPhase, 'NORMAL');
+  assert.equal(resetState.brakeAmount, 0);
+});
+
+test('Level 8 — Rock Garden: 7 Lil Yetis, grouped rock layout with readable short vs safe route choices, gentle slope, braking balance, smooth camera, clean resets, and Levels 1-7 unchanged', () => {
+  // 1. Levels 1-7 remain completely untouched
+  assert.equal(LEVEL_CONFIGS[0].name, 'Snowy Foothills');
+  assert.equal(LEVEL_CONFIGS[1].name, 'Frosty Ridge');
+  assert.equal(LEVEL_CONFIGS[2].name, 'Pine Valley');
+  assert.equal(LEVEL_CONFIGS[3].name, 'Carving Pass');
+  assert.equal(LEVEL_CONFIGS[4].name, 'Drop & Jump');
+  assert.equal(LEVEL_CONFIGS[5].name, 'Pine Slalom');
+  assert.equal(LEVEL_CONFIGS[6].name, 'Avalanche Alley');
+
+  // 2. Level 8 identity, gentle/flat slope, wide rock garden, zero steep-drop warning, smooth terrain
+  const lv8 = LEVEL_CONFIGS[7];
+  assert.equal(lv8.levelNumber, 8);
+  assert.equal(lv8.name, 'Rock Garden');
+  assert.equal(lv8.steepDescents?.length, 1);
+  assert.equal(lv8.flatZones?.length, 1);
+  const gardenZone = lv8.steepDescents![0];
+  assert.equal(gardenZone.id, 'lv8-rock-garden');
+  assert.equal(gardenZone.cameraMode, 'rockGarden');
+  assert.equal(gardenZone.zStart, 440);
+  assert.equal(gardenZone.zEnd, 760);
+
+  // Never triggers steep-drop warning banner across the entire rock garden
+  for (let z = 360; z <= 900; z += 10) {
+    const sample = evaluateSteepDescentAt(lv8.steepDescents, z);
+    assert.equal(sample.warningActive, false, `Level 8 Rock Garden must not show steep-drop warning at z=${z}`);
+  }
+
+  // Gentle slope (flatter than normal mountain slope) and smooth C1 elevation continuity (no cliffs or gaps)
+  const basePitch = Math.atan(SLOPE_GRADIENT);
+  const gardenMidPitch = Math.abs(getTrackPitchAt(8, 600));
+  assert.ok(
+    gardenMidPitch < basePitch - 0.04 && gardenMidPitch > 0.04,
+    `Rock Garden must be mostly flat/gently sloping (midPitch=${gardenMidPitch.toFixed(3)}, base=${basePitch.toFixed(3)})`,
+  );
+  for (let z = 380; z <= 880; z += 2) {
+    const y0 = getTrackElevationForLevel(8, z);
+    const y1 = getTrackElevationForLevel(8, z + 2);
+    assert.ok(y0 - y1 >= 0 && y0 - y1 < 0.75, `No cliff or sudden drop at z=${z} (dy=${(y0 - y1).toFixed(3)})`);
+  }
+
+  // No sharp curve immediately before the first rocks (z = 380..470) or in recovery (z = 760..880)
+  for (let z = 380; z <= 875; z += 5) {
+    const slope = Math.abs((getTrackCenterXForLevel(8, z + 2) - getTrackCenterXForLevel(8, z - 2)) / 4);
+    assert.ok(slope < 0.22, `Rock Garden & recovery must not place rocks immediately after a sharp curve (z=${z}, |dX/dz|=${slope.toFixed(3)})`);
+  }
+
+  // 3. Deterministic structured rock groups: 28 rocks, 0 trees inside garden, 0 obstacles in approach/recovery, no rock hidden behind another
+  const initState = createInitialSimulationState('playing', undefined, 8);
+  assert.equal(initState.followers.length, 7, 'Level 8 must start with Lofi and exactly 7 Lil Yetis');
+  assert.equal(initState.ramps.length, 2, 'Level 8 retains 2 optional ramps outside Rock Garden');
+
+  const approachObs = initState.obstacles.filter((o) => o.z >= 390 && o.z < 440);
+  const gardenObs = initState.obstacles.filter((o) => o.z >= 440 && o.z <= 760);
+  const recoveryObs = initState.obstacles.filter((o) => o.z > 760 && o.z <= 885);
+
+  assert.equal(approachObs.length, 0, `Approach sightline before Rock Garden must be obstacle-free (found ${approachObs.length})`);
+  assert.equal(gardenObs.length, 28, `Rock Garden must contain exact 28 structured group rocks (found ${gardenObs.length})`);
+  assert.equal(
+    gardenObs.filter((o) => o.kind === 'rock').length,
+    28,
+    'Rock Garden must contain only structured rocks (0 trees hiding rocks)',
+  );
+  assert.equal(recoveryObs.length, 0, `Recovery area after Rock Garden must be completely obstacle-free (found ${recoveryObs.length})`);
+
+  // Verify no rock is hidden directly behind another rock in the same lane (staggered z/offsetX)
+  for (let i = 0; i < gardenObs.length; i++) {
+    for (let j = i + 1; j < gardenObs.length; j++) {
+      const a = gardenObs[i];
+      const b = gardenObs[j];
+      const dz = Math.abs(a.z - b.z);
+      const dx = Math.abs(a.offsetX - b.offsetX);
+      assert.ok(
+        !(dz < 18 && dx < 1.8),
+        `Rocks #${a.id} (z=${a.z}, x=${a.offsetX}) and #${b.id} (z=${b.z}, x=${b.offsetX}) must not hide directly behind one another`,
+      );
+    }
+  }
+
+  // 4. Both route choices work:
+  //    - 'direct': shorter central route through more rocks (with tactical short braking in tight spots)
+  //    - 'safer': slightly longer outer wide route with fewer rocks & larger rock clearance (minimal/no braking needed)
+  //    - 'overbrake': holding brake continuously across the rock garden slows Lofi and brings avalanche much closer
+  const runRockGarden = (mode: 'direct' | 'safer' | 'overbrake') => {
+    const s = createInitialSimulationState('playing', undefined, 8);
+    s.windGust.cooldown = 999; // isolate deterministic rock garden navigation
+    const dt = 1 / 60;
+    let gardenStartTravel = 0;
+    let gardenEndTravel = 0;
+    let nearbyRockCount = 0;
+    const countedRockIds = new Set<number>();
+    let minRockClearance = Infinity;
+    let minAvalancheDist = s.avalancheDistance;
+    let minFollowerGap = Infinity;
+    let maxFollowerBrake = 0;
+
+    // Sector-specific waypoints inside Rock Garden (z = 440..760)
+    const getDesiredGardenOffset = (z: number): number => {
+      if (mode === 'safer') {
+        // Wide outer safer arcs using the 32m open aprons between sectors:
+        // Sector 1 RIGHT (+9.4) -> apron at z=494 sweeps to Sector 2 LEFT (-9.4) -> z=574 to +9.4 -> z=654 to -9.4
+        if (z < 494) return 9.4;
+        if (z < 574) return -9.4;
+        if (z < 654) return 9.4;
+        if (z < 746) return -9.4;
+        return 0;
+      }
+      // Direct shorter center route threading the staggered boulder clusters:
+      // Sector 1 rocks: 456(-2.2), 479(+2.6), 502(-2.0) -> weave +2.2, -2.0, +2.2
+      if (z < 462) return 2.2;
+      if (z < 485) return -2.0;
+      if (z < 514) return 2.2;
+      // Sector 2 rocks: 536(+2.2), 559(-2.6), 582(+2.0) -> weave -2.2, +2.0, -2.2
+      if (z < 542) return -2.2;
+      if (z < 565) return 2.0;
+      if (z < 594) return -2.2;
+      // Sector 3 rocks: 616(-2.2), 639(+2.6), 662(-2.0) -> weave +2.2, -2.0, +2.2
+      if (z < 622) return 2.2;
+      if (z < 645) return -2.0;
+      if (z < 674) return 2.2;
+      // Sector 4 rocks: 696(+2.2), 719(-2.6), 742(+2.0) -> weave -2.2, +2.0, -2.2
+      if (z < 702) return -2.2;
+      if (z < 725) return 2.0;
+      if (z < 754) return -2.2;
+      return 0;
+    };
+
+    for (let step = 0; step < 3800 && s.phase === 'playing'; step++) {
+      let targetLat = 0;
+      if (s.distance >= 415 && s.distance <= 772) {
+        targetLat = getDesiredGardenOffset(s.distance);
+      } else {
+        // Outside rock garden: pick clearest safe lane ahead
+        const candidates = [0, -3.4, 3.4, -6.0, 6.0];
+        let bestScore = -Infinity;
+        for (const cand of candidates) {
+          let minClear = 20;
+          for (const obs of s.obstacles) {
+            const dz = obs.z - s.distance;
+            if (dz > -1.5 && dz < 42 && obs.kind !== 'fallen_log') {
+              const latGap = Math.abs(obs.offsetX - cand) - obs.radius;
+              const weightedGap = latGap + (dz / 42) * 1.4;
+              if (weightedGap < minClear) minClear = weightedGap;
+            }
+          }
+          const score = minClear - Math.abs(cand) * 0.06;
+          if (score > bestScore) {
+            bestScore = score;
+            targetLat = cand;
+          }
+        }
+      }
+
+      const slopeAhead = getTrackCenterX(s.distance + 4) - getTrackCenterX(s.distance);
+      const desiredWorldLatVel =
+        (targetLat - s.lateralOffset) * 4.2 + (slopeAhead / 4) * s.forwardSpeed;
+      const input = createInitialInput();
+      if (desiredWorldLatVel - s.lateralVelocity > 0.35) input.right = true;
+      else if (desiredWorldLatVel - s.lateralVelocity < -0.35) input.left = true;
+
+      // Jump cleanly over any fallen_log on the late stretch outside Rock Garden
+      if (s.jumpState === 'GROUNDED') {
+        for (const obs of s.obstacles) {
+          if (obs.kind === 'fallen_log') {
+            const dz = obs.z - s.distance;
+            if (dz > 2 && dz < 11) {
+              input.jumpQueued = true;
+              break;
+            }
+          }
+        }
+      }
+
+      const inGarden = s.distance >= gardenZone.zStart && s.distance <= gardenZone.zEnd;
+      if (mode === 'direct') {
+        // Short tactical braking taps (~0.35s) entering tight center-cluster bends
+        input.brake =
+          inGarden &&
+          ((s.distance >= 464 && s.distance <= 476) ||
+            (s.distance >= 544 && s.distance <= 556) ||
+            (s.distance >= 624 && s.distance <= 636) ||
+            (s.distance >= 704 && s.distance <= 716));
+      } else if (mode === 'overbrake') {
+        // Hold brake continuously throughout the entire rock garden
+        input.brake = inGarden;
+      } else {
+        // Safer wider route requires zero continuous braking
+        input.brake = false;
+      }
+
+      stepSimulation(s, input, dt);
+
+      if (s.distance >= gardenZone.zStart && gardenStartTravel === 0) {
+        gardenStartTravel = s.travelDistance;
+      }
+      if (s.distance >= gardenZone.zEnd && gardenEndTravel === 0) {
+        gardenEndTravel = s.travelDistance;
+      }
+
+      if (inGarden) {
+        for (const rock of gardenObs) {
+          const dz = Math.abs(rock.z - s.distance);
+          if (dz < 3.5) {
+            const clearance = Math.hypot(rock.offsetX - s.lateralOffset, dz) - rock.radius;
+            if (clearance < minRockClearance) minRockClearance = clearance;
+            if (clearance < 3.2 && !countedRockIds.has(rock.id)) {
+              countedRockIds.add(rock.id);
+              nearbyRockCount += 1;
+            }
+          }
+        }
+      }
+
+      minAvalancheDist = Math.min(minAvalancheDist, s.avalancheDistance);
+      const lofiWorldX = getTrackCenterX(s.distance) + s.lateralOffset;
+      for (let i = 0; i < s.followers.length; i++) {
+        maxFollowerBrake = Math.max(maxFollowerBrake, s.followers[i].brakeAmount);
+        const leadDist = i === 0 ? s.distance : s.followers[i - 1].distance;
+        const leadX = i === 0 ? lofiWorldX : s.followers[i - 1].worldX;
+        const gap = Math.hypot(leadX - s.followers[i].worldX, leadDist - s.followers[i].distance);
+        minFollowerGap = Math.min(minFollowerGap, gap);
+      }
+    }
+
+    return {
+      s,
+      gardenTravel: gardenEndTravel - gardenStartTravel,
+      nearbyRockCount,
+      minRockClearance,
+      minAvalancheDist,
+      minFollowerGap,
+      maxFollowerBrake,
+    };
+  };
+
+  const direct = runRockGarden('direct');
+  assert.equal(direct.s.phase, 'victory', 'Shorter rockier center route must complete Level 8 cleanly');
+  assert.equal(direct.s.hitCount, 0, 'Shorter route with tactical braking must finish with 0 obstacle hits');
+  assert.equal(direct.s.followers.length, 7, 'All 7 Lil Yetis must stay with Lofi on the shorter route');
+  assert.ok(
+    direct.minFollowerGap >= 2.0,
+    `All 7 Lil Yetis must stay cleanly separated without stacking on shorter route (minGap=${direct.minFollowerGap.toFixed(2)}m)`,
+  );
+  assert.ok(
+    direct.maxFollowerBrake >= 0.35,
+    `Lil Yetis must mimic braking on tight sections (maxFollowerBrake=${direct.maxFollowerBrake.toFixed(2)})`,
+  );
+
+  const safer = runRockGarden('safer');
+  assert.equal(safer.s.phase, 'victory', 'Longer wider safer route must complete Level 8 cleanly');
+  assert.equal(safer.s.hitCount, 0, 'Safer route must finish with 0 obstacle hits');
+  assert.equal(safer.s.followers.length, 7, 'All 7 Lil Yetis must stay with Lofi on the safer route');
+  assert.ok(
+    safer.minFollowerGap >= 2.0,
+    `All 7 Lil Yetis must stay cleanly separated on safer route (minGap=${safer.minFollowerGap.toFixed(2)}m)`,
+  );
+  assert.ok(
+    safer.minAvalancheDist >= 10.0,
+    `Safer route must stay well ahead of avalanche without continuous braking (minDist=${safer.minAvalancheDist.toFixed(1)}m)`,
+  );
+
+  // Verify the meaningful trade-off between the two routes:
+  // Safer outer route travels slightly farther across z=440..760 AND passes fewer nearby rocks / wider clearance!
+  assert.ok(
+    safer.gardenTravel > direct.gardenTravel + 3.0,
+    `Safer route must be slightly longer than the direct rockier route (safer=${safer.gardenTravel.toFixed(1)}m vs direct=${direct.gardenTravel.toFixed(1)}m)`,
+  );
+  assert.ok(
+    safer.nearbyRockCount < direct.nearbyRockCount,
+    `Safer route must pass fewer nearby rocks than direct route (safer=${safer.nearbyRockCount} vs direct=${direct.nearbyRockCount})`,
+  );
+  assert.ok(
+    safer.minRockClearance > direct.minRockClearance,
+    `Safer route must offer wider minimum rock clearance (safer=${safer.minRockClearance.toFixed(2)}m vs direct=${direct.minRockClearance.toFixed(2)}m)`,
+  );
+
+  // Excessive braking throughout the Rock Garden slows Lofi and lets the avalanche close in noticeably
+  const overbrake = runRockGarden('overbrake');
+  assert.ok(
+    overbrake.minAvalancheDist < safer.minAvalancheDist - 12.0,
+    `Excessive continuous braking must let avalanche approach (overbrake=${overbrake.minAvalancheDist.toFixed(1)}m vs safer=${safer.minAvalancheDist.toFixed(1)}m)`,
+  );
+
+  // 5. Smooth rear 'rockGarden' camera transitions: slightly raise & pull back, return to normal, zero sudden cuts, never side/front
+  const camRig = createSteepCameraRigState();
+  let peakGardenBack = 0;
+  let peakGardenHeight = 0;
+  let maxFrameJump = 0;
+  let prevBack = 0;
+  let prevHeight = 0;
+
+  for (let z = 340; z <= 940; z += 0.48) {
+    const sample = evaluateSteepDescentAt(lv8.steepDescents, z);
+    stepSteepCameraRigState(camRig, sample.phase, sample.slopeFactor, false, 1 / 60, false, {
+      cameraMode: sample.zone?.cameraMode ?? 'rockGarden',
+      playerDistance: z,
+      activeZone: sample.zone ?? undefined,
+    });
+    const jump = Math.hypot(camRig.extraBack - prevBack, camRig.extraHeight - prevHeight);
+    maxFrameJump = Math.max(maxFrameJump, jump);
+    prevBack = camRig.extraBack;
+    prevHeight = camRig.extraHeight;
+
+    assert.equal(camRig.curveOutsideX, 0, 'Level 8 rear camera must never shift into a side camera');
+    if (z >= gardenZone.zStart + 25 && z <= gardenZone.zEnd) {
+      peakGardenBack = Math.max(peakGardenBack, camRig.extraBack);
+      peakGardenHeight = Math.max(peakGardenHeight, camRig.extraHeight);
+    }
+  }
+  assert.ok(
+    peakGardenBack >= 2.2 && peakGardenHeight >= 2.2,
+    `Camera must slightly raise & pull back during Rock Garden (back=${peakGardenBack.toFixed(2)}, height=${peakGardenHeight.toFixed(2)})`,
+  );
+  assert.ok(
+    camRig.extraBack < 0.05 && camRig.extraHeight < 0.05,
+    `Camera must smoothly return to normal after Rock Garden (endBack=${camRig.extraBack.toFixed(3)}, endHeight=${camRig.extraHeight.toFixed(3)})`,
+  );
+  assert.ok(
+    maxFrameJump < 0.25,
+    `Camera transitions must be smooth with zero sudden cuts (maxJump=${maxFrameJump.toFixed(3)})`,
+  );
+
+  // 6. Retry & Next Level (Level 8 -> Level 9) cleanly reset course & camera state with zero duplication
+  const resetState = safer.s;
+  const obsCountBefore = resetState.obstacles.length;
+  const rampCountBefore = resetState.ramps.length;
+  retryCurrentLevel(resetState);
+  assert.equal(resetState.levelNumber, 8);
+  assert.equal(resetState.followers.length, 7, 'Retry on Level 8 must preserve exactly 7 Lil Yetis');
+  assert.equal(resetState.obstacles.length, obsCountBefore, 'Retry must not duplicate Level 8 rocks or obstacles');
+  assert.equal(resetState.ramps.length, rampCountBefore, 'Retry must not duplicate Level 8 ramps');
+  assert.equal(resetState.steepPhase, 'NORMAL', 'Retry must reset steepPhase to NORMAL');
+  assert.equal(resetState.brakeAmount, 0, 'Retry must reset brakeAmount to 0');
+
+  resetState.distance = resetState.levelLength - 1;
+  stepSimulation(resetState, createInitialInput(), 0.1);
+  assert.equal(resetState.phase, 'victory');
+  advanceToNextLevel(resetState);
+  assert.equal(resetState.levelNumber, 9);
+  assert.equal(resetState.followers.length, 8, 'Next Level after Level 8 Victory must start Level 9 with 8 Lil Yetis');
+  assert.equal(resetState.steepPhase, 'NORMAL');
+  assert.equal(resetState.brakeAmount, 0);
+});
+
+test('Level 9 — Double Drop: 8 Lil Yetis, two separate downhills + flat recovery + wide shelter recovery, braking balance, smooth rear camera, retry/next-level, and Levels 1-8 unchanged', () => {
+  // 1. Levels 1-8 remain completely untouched
+  assert.equal(LEVEL_CONFIGS[0].name, 'Snowy Foothills');
+  assert.equal(LEVEL_CONFIGS[1].name, 'Frosty Ridge');
+  assert.equal(LEVEL_CONFIGS[2].name, 'Pine Valley');
+  assert.equal(LEVEL_CONFIGS[3].name, 'Carving Pass');
+  assert.equal(LEVEL_CONFIGS[4].name, 'Drop & Jump');
+  assert.equal(LEVEL_CONFIGS[5].name, 'Pine Slalom');
+  assert.equal(LEVEL_CONFIGS[6].name, 'Avalanche Alley');
+  assert.equal(LEVEL_CONFIGS[7].name, 'Rock Garden');
+
+  // 2. Level 9 layout sequence: Drop 1 (moderate) -> Flat Recovery -> Drop 2 (longer, gentle curve) -> Wide Shelter Recovery
+  const lv9 = LEVEL_CONFIGS[8];
+  assert.equal(lv9.levelNumber, 9);
+  assert.equal(lv9.name, 'Double Drop');
+  assert.equal(lv9.steepDescents?.length, 2, 'Level 9 must have exactly two separate downhill sections');
+  assert.equal(lv9.flatZones?.length, 1, 'Level 9 must have a flat recovery area between the two downhills');
+
+  const drop1 = lv9.steepDescents![0];
+  const drop2 = lv9.steepDescents![1];
+  const recoveryFlat = lv9.flatZones![0];
+
+  assert.equal(drop1.id, 'lv9-double-drop-1');
+  assert.equal(drop2.id, 'lv9-double-drop-2');
+  assert.equal(recoveryFlat.id, 'lv9-double-drop-recovery');
+  assert.ok(drop1.zEnd < recoveryFlat.zStart, 'Flat recovery must follow Drop 1');
+  assert.ok(recoveryFlat.zEnd < drop2.zStart, 'Drop 2 must follow the flat recovery area');
+  assert.ok(
+    recoveryFlat.zEnd - recoveryFlat.zStart >= 200,
+    `Flat recovery must be long enough to regain control (span=${recoveryFlat.zEnd - recoveryFlat.zStart}m)`,
+  );
+  assert.ok(
+    drop2.zEnd - drop2.zStart > drop1.zEnd - drop1.zStart + 40,
+    `Second downhill (${drop2.zEnd - drop2.zStart}m) must be longer than first downhill (${drop1.zEnd - drop1.zStart}m)`,
+  );
+  assert.ok(
+    drop2.extraGradient > drop1.extraGradient,
+    'Second downhill should escalate moderately beyond first downhill',
+  );
+
+  // Pitch profile & C1 elevation continuity (no cliffs or gaps)
+  const basePitch = Math.atan(SLOPE_GRADIENT);
+  const drop1MidPitch = Math.abs(getTrackPitchAt(9, (drop1.zStart + drop1.zEnd) * 0.5));
+  const flatMidPitch = Math.abs(getTrackPitchAt(9, (recoveryFlat.zStart + recoveryFlat.zEnd) * 0.5));
+  const drop2MidPitch = Math.abs(getTrackPitchAt(9, (drop2.zStart + drop2.zEnd) * 0.5));
+  assert.ok(drop1MidPitch > basePitch + 0.16, `Drop 1 must be a clear downhill (pitch=${drop1MidPitch.toFixed(3)})`);
+  assert.ok(flatMidPitch < basePitch - 0.10, `Recovery area must flatten noticeably (pitch=${flatMidPitch.toFixed(3)})`);
+  assert.ok(drop2MidPitch > drop1MidPitch + 0.02, `Drop 2 must pitch steeper than Drop 1 (${drop2MidPitch.toFixed(3)} vs ${drop1MidPitch.toFixed(3)})`);
+
+  for (let z = 280; z <= 1260; z += 2) {
+    const y0 = getTrackElevationForLevel(9, z);
+    const y1 = getTrackElevationForLevel(9, z + 2);
+    assert.ok(y0 - y1 >= 0 && y0 - y1 < 1.35, `Smooth elevation without cliffs/gaps at z=${z} (dy=${(y0 - y1).toFixed(3)})`);
+  }
+
+  // No sharp turn immediately after Landing 1 (z = 505..620) or Landing 2 (z = 1005..1140)
+  for (let z = drop1.zEnd; z <= drop1.zEnd + 115; z += 5) {
+    const slope = Math.abs((getTrackCenterXForLevel(9, z + 2) - getTrackCenterXForLevel(9, z - 2)) / 4);
+    assert.ok(slope < 0.22, `No sharp turn right after Landing 1 at z=${z} (|dX/dz|=${slope.toFixed(3)})`);
+  }
+  for (let z = drop2.zEnd; z <= drop2.zEnd + 135; z += 5) {
+    const slope = Math.abs((getTrackCenterXForLevel(9, z + 2) - getTrackCenterXForLevel(9, z - 2)) / 4);
+    assert.ok(slope < 0.22, `No sharp turn right after Landing 2 at z=${z} (|dX/dz|=${slope.toFixed(3)})`);
+  }
+
+  // Drop 2 has a clear gentle curve (not dead straight, not sharp)
+  let drop2PeakCurveSlope = 0;
+  for (let z = drop2.zStart + 10; z <= drop2.zEnd - 10; z += 5) {
+    const slope = Math.abs((getTrackCenterXForLevel(9, z + 2) - getTrackCenterXForLevel(9, z - 2)) / 4);
+    if (slope > drop2PeakCurveSlope) drop2PeakCurveSlope = slope;
+  }
+  assert.ok(
+    drop2PeakCurveSlope >= 0.14 && drop2PeakCurveSlope <= 0.44,
+    `Second downhill should feature a gentle carvable curve (peak |dX/dz|=${drop2PeakCurveSlope.toFixed(3)})`,
+  );
+
+  // Starts with Lofi + exactly 8 Lil Yetis; sparse obstacles with clear crests & completely open shelter recovery
+  const initState = createInitialSimulationState('playing', undefined, 9);
+  assert.equal(initState.followers.length, 8, 'Level 9 must start with Lofi and exactly 8 Lil Yetis');
+
+  const approach1Obs = initState.obstacles.filter((o) => o.z >= 290 && o.z < drop1.zStart);
+  const drop1Obs = initState.obstacles.filter((o) => o.z >= drop1.zStart && o.z <= drop1.zEnd);
+  const flatObs = initState.obstacles.filter((o) => o.z > drop1.zEnd && o.z < drop2.zStart);
+  const drop2Obs = initState.obstacles.filter((o) => o.z >= drop2.zStart && o.z <= drop2.zEnd);
+  const shelterRecoveryObs = initState.obstacles.filter((o) => o.z > drop2.zEnd && o.z <= 1255);
+
+  assert.equal(approach1Obs.length, 0, 'Approach crest before Drop 1 must be unobstructed');
+  assert.ok(drop1Obs.length <= 4, `Drop 1 obstacles must be sparse (found ${drop1Obs.length})`);
+  assert.ok(flatObs.length <= 3, `Flat recovery obstacles must be sparse (found ${flatObs.length})`);
+  assert.ok(drop2Obs.length <= 5, `Drop 2 obstacles must be sparse (found ${drop2Obs.length})`);
+  assert.equal(shelterRecoveryObs.length, 0, 'Wide recovery area before shelter must be obstacle-free');
+  for (const obs of [...drop1Obs, ...flatObs, ...drop2Obs]) {
+    assert.ok(
+      Math.abs(obs.offsetX) >= 6.0,
+      `Obstacle at z=${obs.z} must leave a wide central safe route (offsetX=${obs.offsetX})`,
+    );
+  }
+
+  // 3. Full physics runs:
+  //    - 'controlled': brake on both downhills, release in flat recovery to reset speed & direction -> Victory, 0 hits, 8 Lil Yetis
+  //    - 'overbrake': brake excessively across recovery & drops -> strong avalanche pressure
+  //    - 'noBrake': skip braking on downhills -> high speed degrades steering authority
+  const runDoubleDrop = (mode: 'controlled' | 'overbrake' | 'noBrake') => {
+    const s = createInitialSimulationState('playing', undefined, 9);
+    s.windGust.cooldown = 999; // isolate deterministic downhill/recovery physics
+    const dt = 1 / 60;
+    let recoveryEntrySpeed = 0;
+    let recoveryMidSpeed = 0;
+    let maxDrop2Speed = 0;
+    let minSteerMultDrop2 = 1;
+    let maxOverspeedDrop2 = 0;
+    let minAvalancheDist = s.avalancheDistance;
+    let minFollowerGap = Infinity;
+    let maxFollowerBrake = 0;
+
+    for (let step = 0; step < 4000 && s.phase === 'playing'; step++) {
+      const candidates = [0, -3.2, 3.2, -5.8, 5.8];
+      let targetLat = 0;
+      let bestScore = -Infinity;
+      for (const cand of candidates) {
+        let minClear = 20;
+        for (const obs of s.obstacles) {
+          const dz = obs.z - s.distance;
+          if (dz > -1.5 && dz < 42) {
+            const latGap = Math.abs(obs.offsetX - cand) - obs.radius;
+            const weightedGap = latGap + (dz / 42) * 1.4;
+            if (weightedGap < minClear) minClear = weightedGap;
+          }
+        }
+        const score = minClear - Math.abs(cand) * 0.06;
+        if (score > bestScore) {
+          bestScore = score;
+          targetLat = cand;
+        }
+      }
+
+      const slopeAhead = getTrackCenterX(s.distance + 4) - getTrackCenterX(s.distance);
+      const desiredWorldLatVel =
+        (targetLat - s.lateralOffset) * 3.8 + (slopeAhead / 4) * s.forwardSpeed;
+      const input = createInitialInput();
+      if (desiredWorldLatVel - s.lateralVelocity > 0.4) input.right = true;
+      else if (desiredWorldLatVel - s.lateralVelocity < -0.4) input.left = true;
+
+      const onDrop1 = s.distance >= drop1.zStart + 18 && s.distance <= drop1.zEnd - 12;
+      const onRecovery = s.distance >= recoveryFlat.zStart + 10 && s.distance <= recoveryFlat.zEnd - 10;
+      const onDrop2 = s.distance >= drop2.zStart + 20 && s.distance <= drop2.zEnd - 14;
+
+      if (mode === 'controlled') {
+        // Brake on both downhills when speed rises above cruise, release in recovery to reset cleanly
+        input.brake = (onDrop1 || onDrop2) && s.forwardSpeed > s.levelBaseSpeed + 1.8;
+      } else if (mode === 'overbrake') {
+        // Hold brake excessively through recovery and drops
+        input.brake = onRecovery || (onDrop1 && s.forwardSpeed > s.levelBaseSpeed - 4);
+      } else {
+        input.brake = false;
+      }
+
+      stepSimulation(s, input, dt);
+
+      if (s.distance >= recoveryFlat.zStart && recoveryEntrySpeed === 0) {
+        recoveryEntrySpeed = s.forwardSpeed;
+      }
+      if (s.distance >= (recoveryFlat.zStart + recoveryFlat.zEnd) * 0.5 && recoveryMidSpeed === 0) {
+        recoveryMidSpeed = s.forwardSpeed;
+      }
+      if (s.distance >= drop2.zStart + 35 && s.distance <= drop2.zEnd) {
+        maxDrop2Speed = Math.max(maxDrop2Speed, s.forwardSpeed);
+        const bal = computeSpeedSteerBalance(
+          s.forwardSpeed,
+          s.levelBaseSpeed,
+          s.brakeAmount,
+          s.jumpState === 'AIRBORNE',
+        );
+        minSteerMultDrop2 = Math.min(minSteerMultDrop2, bal.steerAccelMult);
+        maxOverspeedDrop2 = Math.max(maxOverspeedDrop2, bal.overspeedRatio);
+      }
+
+      minAvalancheDist = Math.min(minAvalancheDist, s.avalancheDistance);
+      const lofiWorldX = getTrackCenterX(s.distance) + s.lateralOffset;
+      for (let i = 0; i < s.followers.length; i++) {
+        maxFollowerBrake = Math.max(maxFollowerBrake, s.followers[i].brakeAmount);
+        const leadDist = i === 0 ? s.distance : s.followers[i - 1].distance;
+        const leadX = i === 0 ? lofiWorldX : s.followers[i - 1].worldX;
+        const gap = Math.hypot(leadX - s.followers[i].worldX, leadDist - s.followers[i].distance);
+        minFollowerGap = Math.min(minFollowerGap, gap);
+      }
+    }
+
+    return {
+      s,
+      recoveryEntrySpeed,
+      recoveryMidSpeed,
+      maxDrop2Speed,
+      minSteerMultDrop2,
+      maxOverspeedDrop2,
+      minAvalancheDist,
+      minFollowerGap,
+      maxFollowerBrake,
+    };
+  };
+
+  const controlled = runDoubleDrop('controlled');
+  assert.equal(controlled.s.phase, 'victory', 'Controlled braking on both drops must complete Level 9 cleanly');
+  assert.equal(controlled.s.hitCount, 0, 'Controlled run must clear Level 9 with 0 obstacle hits');
+  assert.equal(controlled.s.followers.length, 8, 'All 8 Lil Yetis must finish Level 9 with Lofi');
+  assert.ok(
+    Math.abs(controlled.recoveryMidSpeed - lv9.baseSpeed) <= 1.6,
+    `Recovery area must smoothly reset speed back near cruise (${controlled.recoveryMidSpeed.toFixed(1)} vs ${lv9.baseSpeed})`,
+  );
+  assert.ok(
+    controlled.minAvalancheDist >= 10.0,
+    `Controlled Double Drop run must keep fair avalanche clearance (minDist=${controlled.minAvalancheDist.toFixed(1)}m)`,
+  );
+  assert.ok(
+    controlled.minFollowerGap >= 2.0,
+    `All 8 Lil Yetis must stay cleanly separated without stacking (minGap=${controlled.minFollowerGap.toFixed(2)}m)`,
+  );
+  assert.ok(
+    controlled.maxFollowerBrake >= 0.35,
+    `Lil Yetis must mimic braking on downhills (maxFollowerBrake=${controlled.maxFollowerBrake.toFixed(2)})`,
+  );
+
+  const overbrake = runDoubleDrop('overbrake');
+  assert.ok(
+    overbrake.minAvalancheDist < controlled.minAvalancheDist - 8.0,
+    `Excessive braking must bring avalanche significantly closer (overbrake=${overbrake.minAvalancheDist.toFixed(1)}m vs controlled=${controlled.minAvalancheDist.toFixed(1)}m)`,
+  );
+
+  const noBrake = runDoubleDrop('noBrake');
+  assert.ok(
+    noBrake.maxDrop2Speed > lv9.baseSpeed + 8.0,
+    `Skipping brakes on Drop 2 must build high speed (got ${noBrake.maxDrop2Speed.toFixed(1)} m/s)`,
+  );
+  assert.ok(
+    noBrake.maxOverspeedDrop2 >= 0.65 && noBrake.minSteerMultDrop2 <= 0.76,
+    `Excessive unbraked speed on Drop 2 must make steering noticeably harder (overspeed=${noBrake.maxOverspeedDrop2.toFixed(2)}, steerMult=${noBrake.minSteerMultDrop2.toFixed(2)})`,
+  );
+
+  // 4. Smooth rear camera transitions across Drop 1 -> NORMAL Flat Recovery -> Drop 2 -> NORMAL Shelter Recovery
+  const camRig = createSteepCameraRigState();
+  let peakDrop1Back = 0;
+  let recoveryCenterBack = 99;
+  let peakDrop2Back = 0;
+  let maxFrameJump = 0;
+  let prevBack = 0;
+  let prevHeight = 0;
+
+  for (let z = 260; z <= 1220; z += 0.48) {
+    const sample = evaluateSteepDescentAt(lv9.steepDescents, z);
+    stepSteepCameraRigState(camRig, sample.phase, sample.slopeFactor, false, 1 / 60, false, {
+      cameraMode: sample.zone?.cameraMode ?? 'alley',
+      playerDistance: z,
+      activeZone: sample.zone ?? undefined,
+    });
+    const jump = Math.hypot(camRig.extraBack - prevBack, camRig.extraHeight - prevHeight);
+    maxFrameJump = Math.max(maxFrameJump, jump);
+    prevBack = camRig.extraBack;
+    prevHeight = camRig.extraHeight;
+
+    assert.equal(camRig.curveOutsideX, 0, 'Level 9 rear camera must never shift into a side camera');
+    if (z >= drop1.zStart + 30 && z <= drop1.zEnd) {
+      peakDrop1Back = Math.max(peakDrop1Back, camRig.extraBack);
+    }
+    if (z >= 640 && z <= 700) {
+      recoveryCenterBack = Math.min(recoveryCenterBack, camRig.extraBack);
+    }
+    if (z >= drop2.zStart + 40 && z <= drop2.zEnd) {
+      peakDrop2Back = Math.max(peakDrop2Back, camRig.extraBack);
+    }
+  }
+  assert.ok(peakDrop1Back >= 2.2, `Camera must smoothly pull back on Drop 1 (got ${peakDrop1Back.toFixed(2)})`);
+  assert.ok(recoveryCenterBack < 0.08, `Camera must smoothly return to normal in flat recovery (got ${recoveryCenterBack.toFixed(3)})`);
+  assert.ok(peakDrop2Back >= 2.4, `Camera must smoothly pull back on Drop 2 (got ${peakDrop2Back.toFixed(2)})`);
+  assert.ok(camRig.extraBack < 0.05 && camRig.extraHeight < 0.05, 'Camera must return smoothly to normal after Drop 2');
+  assert.ok(maxFrameJump < 0.25, `Camera transitions must be smooth with zero sudden cuts (maxJump=${maxFrameJump.toFixed(3)})`);
+
+  // 5. Retry & Next Level (Level 9 -> Level 10) cleanly reset course & camera state with zero duplication
+  const resetState = controlled.s;
+  const obsCountBefore = resetState.obstacles.length;
+  retryCurrentLevel(resetState);
+  assert.equal(resetState.levelNumber, 9);
+  assert.equal(resetState.followers.length, 8, 'Retry on Level 9 must preserve exactly 8 Lil Yetis');
+  assert.equal(resetState.obstacles.length, obsCountBefore, 'Retry must not duplicate Level 9 obstacles');
+  assert.equal(resetState.steepPhase, 'NORMAL', 'Retry must reset steepPhase to NORMAL');
+  assert.equal(resetState.brakeAmount, 0, 'Retry must reset brakeAmount to 0');
+
+  resetState.distance = resetState.levelLength - 1;
+  stepSimulation(resetState, createInitialInput(), 0.1);
+  assert.equal(resetState.phase, 'victory');
+  advanceToNextLevel(resetState);
+  assert.equal(resetState.levelNumber, 10);
+  assert.equal(resetState.followers.length, 9, 'Next Level after Level 9 Victory must start Level 10 with 9 Lil Yetis');
+  assert.equal(resetState.steepPhase, 'NORMAL');
+  assert.equal(resetState.brakeAmount, 0);
 });
 
 

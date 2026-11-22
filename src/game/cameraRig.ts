@@ -15,6 +15,7 @@ import {
 import type { GamePhase, SteepCameraPhase } from './types';
 import {
   createSteepCameraRigState,
+  evaluateSteepDescentAt,
   resetSteepCameraRigState,
   stepSteepCameraRigState,
   type SteepCameraRigState,
@@ -157,8 +158,10 @@ export function createCameraRig(camera: THREE.PerspectiveCamera): CameraRig {
       // Smoothly elevates/pulls back on Level 3 steep drop, or shifts smoothly toward curve outside on Level 4 Carving Pass.
       const resolvedLevel = levelNumber ?? getActiveTrackLevelNumber();
       const levelProfile = getLevelTrackProfile(resolvedLevel);
-      const activeCameraMode =
-        levelProfile.steepDescents?.[0]?.cameraMode ?? 'steep';
+      const activeZone =
+        evaluateSteepDescentAt(levelProfile.steepDescents, playerDistance).zone ??
+        levelProfile.steepDescents?.[0];
+      const activeCameraMode = activeZone?.cameraMode ?? 'steep';
 
       stepSteepCameraRigState(
         steepCamState,
@@ -171,6 +174,8 @@ export function createCameraRig(camera: THREE.PerspectiveCamera): CameraRig {
           cameraMode: activeCameraMode,
           carvingPass: levelProfile.carvingPass,
           playerDistance,
+          playerJumpHeight,
+          activeZone,
         },
       );
 

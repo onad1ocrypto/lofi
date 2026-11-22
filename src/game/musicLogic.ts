@@ -20,6 +20,64 @@ export const BGM_PLAYLIST: readonly BgmTrackEntry[] = [
   { id: 2, src: BGM_SECOND_TRACK_SRC },
 ] as const;
 
+/**
+ * Custom MP3 sound effects for key gameplay events:
+ * - gameOver: played when Lofi is caught by the avalanche or crashes out
+ * - collectible: played when picking up a Lil Yeti collectible item on the road
+ * - finish: celebratory fanfare played when Lofi reaches the shelter
+ */
+export const SFX_TRACK_SRCS = {
+  gameOver:
+    '/assets/aistudio/freesound_community-negative_beeps-6008_1ac25b4a.mp3',
+  collectible:
+    '/assets/aistudio/universfield-video-game-bonus-323603_d5dfb245.mp3',
+  finish:
+    '/assets/aistudio/freesound_community-tada-fanfare-a-6313_5fa556d6.mp3',
+} as const;
+
+export type SfxClipKey = keyof typeof SFX_TRACK_SRCS;
+
+export interface SfxClipConfig {
+  readonly key: SfxClipKey;
+  readonly src: string;
+  readonly volume: number;
+  readonly duckPeak: number;
+  readonly duckDurationMs: number;
+}
+
+export const SFX_CLIP_CONFIG: Readonly<Record<SfxClipKey, SfxClipConfig>> = {
+  gameOver: {
+    key: 'gameOver',
+    src: SFX_TRACK_SRCS.gameOver,
+    volume: 0.72,
+    duckPeak: 1.0,
+    duckDurationMs: 1400,
+  },
+  collectible: {
+    key: 'collectible',
+    src: SFX_TRACK_SRCS.collectible,
+    volume: 0.62,
+    duckPeak: 0.45,
+    duckDurationMs: 420,
+  },
+  finish: {
+    key: 'finish',
+    src: SFX_TRACK_SRCS.finish,
+    volume: 0.78,
+    duckPeak: 0.85,
+    duckDurationMs: 1800,
+  },
+} as const;
+
+export function getSfxClipConfig(key: SfxClipKey): SfxClipConfig {
+  return SFX_CLIP_CONFIG[key];
+}
+
+export function computeSfxClipVolume(key: SfxClipKey, muted: boolean): number {
+  if (muted) return 0;
+  return Math.max(0, Math.min(1, SFX_CLIP_CONFIG[key].volume));
+}
+
 export interface BgmPlaylistState {
   currentIndex: number;
   trackSrc: string;

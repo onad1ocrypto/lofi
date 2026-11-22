@@ -4,12 +4,16 @@ import {
   computeCarvingPassCenterOffset,
 } from './carvingPassLogic';
 import {
+  computeFlatZonesElevationOffset,
+  computeFlatZonesExtraHalfWidth,
+  computeFlatZonesGradientReduction,
   computeSteepZonesElevationOffset,
   computeSteepZonesExtraGradient,
   computeSteepZonesExtraHalfWidth,
 } from './steepDescentLogic';
 import type {
   CarvingPassConfig,
+  FlatMomentumZone,
   ObstacleKind,
   SteepDescentZone,
   TrackObstacle,
@@ -52,8 +56,10 @@ export interface LevelTrackProfile {
   calmZones: ReadonlyArray<{ zStart: number; zEnd: number }>;
   /** Optional local dual-route wide bowl (Level 3: Safe lane vs Bonus ramp lane) */
   splitZone?: TrackSplitZone;
-  /** Optional reusable steep-descent challenge zones (Level 3 steep drop, Level 4 Carving Pass) */
+  /** Optional reusable steep-descent challenge zones */
   steepDescents?: readonly SteepDescentZone[];
+  /** Optional flat snow momentum sections between downhills (Level 7 Avalanche Alley) */
+  flatZones?: readonly FlatMomentumZone[];
   /** Optional dedicated S-shaped carving downhill centerline & outside snow-mound config (Level 4) */
   carvingPass?: CarvingPassConfig;
 }
@@ -194,14 +200,14 @@ export const LEVEL_TRACK_PROFILES: readonly LevelTrackProfile[] = [
       moundSpacing: 6.5,
     },
   },
-  // LEVEL 5 — Glacier Bend (1100m, expressive winding valley + dual-route glacier bowl)
+  // LEVEL 5 — Drop & Jump (1100m, short downhill -> clear split: safe route or optional ramp & wide landing)
   {
     levelNumber: 5,
     length: 1100,
     baseHalfWidth: 11.0,
     widthBreathAmp: 0.7,
     widthBreathFreq: 0.0092,
-    curveAmp1: 16.5,
+    curveAmp1: 17.2,
     curveFreq1: 0.0099,
     curvePhase1: -1.65,
     curveAmp2: 5.9,
@@ -210,130 +216,231 @@ export const LEVEL_TRACK_PROFILES: readonly LevelTrackProfile[] = [
     curveAmp3: 1.55,
     curveFreq3: 0.0338,
     curvePhase3: -0.95,
-    earlyCurveScale: 0.56,
-    lateCurveGain: 0.52,
+    earlyCurveScale: 0.48,
+    lateCurveGain: 0.66,
     calmZones: [
-      { zStart: 455, zEnd: 615 },
+      { zStart: 485, zEnd: 715 },
       { zStart: 782, zEnd: 868 },
     ],
     splitZone: {
-      zStart: 445,
-      zEnd: 625,
-      extraHalfWidth: 5.6,
+      zStart: 520,
+      zEnd: 696,
+      extraHalfWidth: 6.4,
       dividerOffsetX: 0,
       safeSide: -1,
       bonusSide: 1,
     },
+    steepDescents: [
+      {
+        id: 'lv5-drop-jump',
+        zStart: 485,
+        zEnd: 570,
+        approachDistance: 48,
+        recoveryDistance: 132,
+        extraGradient: 0.22,
+        extraHalfWidth: 4.6,
+        cameraMode: 'dropJump',
+      },
+    ],
   },
-  // LEVEL 6 — Timber Chute (1180m, faster narrower S-curves through dense alpine pines)
+  // LEVEL 6 — Pine Slalom (1180m, readable zig-zag pine tree slalom + calm recovery exit)
   {
     levelNumber: 6,
     length: 1180,
     baseHalfWidth: 10.6,
     widthBreathAmp: 0.72,
     widthBreathFreq: 0.0098,
-    curveAmp1: 17.5,
+    curveAmp1: 19.6,
     curveFreq1: 0.0102,
     curvePhase1: 0.35,
-    curveAmp2: 6.4,
+    curveAmp2: 7.0,
     curveFreq2: 0.0211,
     curvePhase2: 1.85,
-    curveAmp3: 1.75,
+    curveAmp3: 1.8,
     curveFreq3: 0.0348,
     curvePhase3: 0.25,
-    earlyCurveScale: 0.42,
-    lateCurveGain: 0.72,
+    earlyCurveScale: 0.58,
+    lateCurveGain: 0.50,
     calmZones: [
-      { zStart: 322, zEnd: 412 },
-      { zStart: 762, zEnd: 856 },
+      { zStart: 300, zEnd: 392 },
+      { zStart: 420, zEnd: 825 },
+    ],
+    steepDescents: [
+      {
+        id: 'lv6-pine-slalom',
+        zStart: 420,
+        zEnd: 660,
+        approachDistance: 48,
+        recoveryDistance: 96,
+        extraGradient: 0.02,
+        extraHalfWidth: 4.2,
+        cameraMode: 'slalom',
+      },
     ],
   },
-  // LEVEL 7 — Blizzard Gorge (1260m, crisp technical switchbacks + dual-route bonus split)
+  // LEVEL 7 — Avalanche Alley (1260m, moderate downhill -> flat momentum basin -> longer curved downhill -> wide shelter recovery)
   {
     levelNumber: 7,
     length: 1260,
     baseHalfWidth: 10.3,
-    widthBreathAmp: 0.75,
-    widthBreathFreq: 0.0104,
-    curveAmp1: 18.0,
-    curveFreq1: 0.0105,
-    curvePhase1: -0.45,
-    curveAmp2: 6.7,
-    curveFreq2: 0.0217,
-    curvePhase2: -1.75,
-    curveAmp3: 1.9,
-    curveFreq3: 0.0358,
-    curvePhase3: 1.1,
-    earlyCurveScale: 0.68,
-    lateCurveGain: 0.40,
+    widthBreathAmp: 0.72,
+    widthBreathFreq: 0.0102,
+    curveAmp1: 19.8,
+    curveFreq1: 0.0104,
+    curvePhase1: -0.55,
+    curveAmp2: 6.4,
+    curveFreq2: 0.0214,
+    curvePhase2: -1.7,
+    curveAmp3: 1.75,
+    curveFreq3: 0.0352,
+    curvePhase3: 0.95,
+    earlyCurveScale: 0.56,
+    lateCurveGain: 0.52,
     calmZones: [
-      { zStart: 470, zEnd: 655 },
-      { zStart: 882, zEnd: 976 },
+      // Keep Landing 1 & flat momentum section smooth (no sharp turn immediately after Landing 1)
+      { zStart: 455, zEnd: 695 },
+      // Keep Landing 2 & wide recovery before shelter smooth (no sharp turn immediately after Landing 2)
+      { zStart: 910, zEnd: 1125 },
     ],
-    splitZone: {
-      zStart: 470,
-      zEnd: 655,
-      extraHalfWidth: 5.7,
-      dividerOffsetX: 0,
-      safeSide: -1,
-      bonusSide: 1,
-    },
+    steepDescents: [
+      {
+        id: 'lv7-alley-drop-1',
+        zStart: 320,
+        zEnd: 460,
+        approachDistance: 46,
+        recoveryDistance: 56,
+        extraGradient: 0.24,
+        extraHalfWidth: 4.2,
+        cameraMode: 'alley',
+      },
+      {
+        id: 'lv7-alley-drop-2',
+        zStart: 716,
+        zEnd: 916,
+        approachDistance: 48,
+        recoveryDistance: 114,
+        extraGradient: 0.27,
+        extraHalfWidth: 4.8,
+        cameraMode: 'alley',
+      },
+    ],
+    flatZones: [
+      {
+        id: 'lv7-alley-flat',
+        zStart: 468,
+        zEnd: 706,
+        flattenFraction: 0.78,
+        extraHalfWidth: 3.4,
+        cruiseSpeedDrop: 4.0,
+        naturalCoastDecayRate: 0.55,
+      },
+    ],
   },
-  // LEVEL 8 — Avalanche Run (1340m, sustained carving chicanes & 3 snow kickers)
+  // LEVEL 8 — Rock Garden (1340m, wide gentle rock-garden route choices + open recovery area)
   {
     levelNumber: 8,
     length: 1340,
     baseHalfWidth: 10.0,
-    widthBreathAmp: 0.78,
+    widthBreathAmp: 0.76,
     widthBreathFreq: 0.0108,
-    curveAmp1: 18.1,
+    curveAmp1: 20.6,
     curveFreq1: 0.0108,
     curvePhase1: 2.1,
-    curveAmp2: 6.8,
+    curveAmp2: 7.4,
     curveFreq2: 0.0222,
     curvePhase2: 0.35,
     curveAmp3: 2.0,
     curveFreq3: 0.0366,
     curvePhase3: -1.35,
-    earlyCurveScale: 0.68,
-    lateCurveGain: 0.40,
+    earlyCurveScale: 0.62,
+    lateCurveGain: 0.50,
     calmZones: [
-      { zStart: 282, zEnd: 372 },
-      { zStart: 632, zEnd: 726 },
-      { zStart: 972, zEnd: 1066 },
+      { zStart: 252, zEnd: 342 },
+      // Straight/gentle corridor through approach, entire Rock Garden (440..760), and recovery (760..880) so no rock sits right after a curve
+      { zStart: 380, zEnd: 880 },
+      { zStart: 952, zEnd: 1046 },
+    ],
+    steepDescents: [
+      {
+        id: 'lv8-rock-garden',
+        zStart: 440,
+        zEnd: 760,
+        approachDistance: 52,
+        recoveryDistance: 120,
+        extraGradient: 0.01,
+        extraHalfWidth: 5.6,
+        cameraMode: 'rockGarden',
+      },
+    ],
+    flatZones: [
+      {
+        id: 'lv8-rock-garden-gentle',
+        zStart: 432,
+        zEnd: 768,
+        flattenFraction: 0.45,
+        extraHalfWidth: 0,
+        cruiseSpeedDrop: 0,
+        naturalCoastDecayRate: 1.85,
+      },
     ],
   },
-  // LEVEL 9 — Frostbite Ridge (1420m, high-speed alpine switchbacks + dual-route ridge bowl)
+  // LEVEL 9 — Double Drop (1420m, moderate first downhill -> long flat recovery -> longer curved second downhill -> wide shelter recovery)
   {
     levelNumber: 9,
     length: 1420,
-    baseHalfWidth: 9.7,
-    widthBreathAmp: 0.78,
-    widthBreathFreq: 0.0112,
-    curveAmp1: 20.6,
-    curveFreq1: 0.0110,
-    curvePhase1: -2.2,
-    curveAmp2: 7.9,
-    curveFreq2: 0.0226,
-    curvePhase2: 1.45,
-    curveAmp3: 2.25,
-    curveFreq3: 0.0372,
-    curvePhase3: 0.65,
-    earlyCurveScale: 0.72,
-    lateCurveGain: 0.39,
+    baseHalfWidth: 9.8,
+    widthBreathAmp: 0.74,
+    widthBreathFreq: 0.0108,
+    curveAmp1: 21.5,
+    curveFreq1: 0.0106,
+    curvePhase1: 2.7,
+    curveAmp2: 6.4,
+    curveFreq2: 0.0218,
+    curvePhase2: 0.6,
+    curveAmp3: 1.6,
+    curveFreq3: 0.036,
+    curvePhase3: 0.45,
+    earlyCurveScale: 0.64,
+    lateCurveGain: 0.44,
     calmZones: [
-      { zStart: 485, zEnd: 635 },
-      { zStart: 856, zEnd: 940 },
-      { zStart: 1126, zEnd: 1210 },
+      // Keep Landing 1 & flat recovery area calm so player can reset speed & direction (no sharp turn after Landing 1)
+      { zStart: 500, zEnd: 748 },
+      // Keep Landing 2 & wide recovery before shelter calm (no sharp turn immediately after Landing 2)
+      { zStart: 998, zEnd: 1360 },
     ],
-    splitZone: {
-      zStart: 465,
-      zEnd: 655,
-      extraHalfWidth: 5.8,
-      dividerOffsetX: 0,
-      safeSide: -1,
-      bonusSide: 1,
-    },
+    steepDescents: [
+      {
+        id: 'lv9-double-drop-1',
+        zStart: 350,
+        zEnd: 505,
+        approachDistance: 48,
+        recoveryDistance: 58,
+        extraGradient: 0.25,
+        extraHalfWidth: 4.4,
+        cameraMode: 'alley',
+      },
+      {
+        id: 'lv9-double-drop-2',
+        zStart: 785,
+        zEnd: 1005,
+        approachDistance: 48,
+        recoveryDistance: 120,
+        extraGradient: 0.29,
+        extraHalfWidth: 5.0,
+        cameraMode: 'alley',
+      },
+    ],
+    flatZones: [
+      {
+        id: 'lv9-double-drop-recovery',
+        zStart: 516,
+        zEnd: 746,
+        flattenFraction: 0.76,
+        extraHalfWidth: 3.6,
+        cruiseSpeedDrop: 0,
+        naturalCoastDecayRate: 2.2,
+      },
+    ],
   },
   // LEVEL 10 — Storm Peak Summit (1500m, pinnacle alpine challenge with 9 Lil Yetis)
   {
@@ -440,6 +547,11 @@ export function getTrackHalfWidthForLevel(levelNumber: number, z: number): numbe
   // Widen smoothly across steep-descent slopes and their landing/recovery zones
   if (profile.steepDescents && profile.steepDescents.length > 0) {
     halfW += computeSteepZonesExtraHalfWidth(profile.steepDescents, z);
+  }
+
+  // Widen smoothly across flat snow momentum corridors (Level 7 Avalanche Alley)
+  if (profile.flatZones && profile.flatZones.length > 0) {
+    halfW += computeFlatZonesExtraHalfWidth(profile.flatZones, z);
   }
 
   return Math.max(8.4, halfW);
@@ -585,18 +697,29 @@ export function getTrackExtraGradientForLevel(levelNumber: number, z: number): n
  * and steep-descent faces (strictly equals `-Math.atan(SLOPE_GRADIENT)` outside steep descents).
  */
 export function getTrackPitchAt(levelNumber: number, z: number): number {
-  const extraGrad = getTrackExtraGradientForLevel(levelNumber, z);
-  return -Math.atan(SLOPE_GRADIENT + extraGrad);
+  const profile = getLevelTrackProfile(levelNumber);
+  const extraGrad = computeSteepZonesExtraGradient(profile.steepDescents, z);
+  const flatRed = computeFlatZonesGradientReduction(
+    profile.flatZones,
+    SLOPE_GRADIENT,
+    z,
+  );
+  return -Math.atan(Math.max(0.01, SLOPE_GRADIENT + extraGrad - flatRed));
 }
 
 /**
  * Ground elevation Y at distance z along the slope, smoothly integrating any steep-descent drops
- * and flattening cleanly right at the active level's shelter plaza.
+ * and flat momentum sections, and flattening cleanly right at the active level's shelter plaza.
  */
 export function getTrackElevationForLevel(levelNumber: number, z: number): number {
   const profile = getLevelTrackProfile(levelNumber);
   const baseDrop = -z * SLOPE_GRADIENT;
   const steepOffset = computeSteepZonesElevationOffset(profile.steepDescents, z);
+  const flatOffset = computeFlatZonesElevationOffset(
+    profile.flatZones,
+    SLOPE_GRADIENT,
+    z,
+  );
   const rollAmp = 0.50 + (profile.levelNumber - 1) * 0.05;
   const gentleRoll = Math.sin(z * 0.018 + levelNumber * 0.8) * rollAmp;
 
@@ -606,8 +729,14 @@ export function getTrackElevationForLevel(levelNumber: number, z: number): numbe
     profile.steepDescents,
     profile.length,
   );
-  const flatY = -profile.length * SLOPE_GRADIENT + totalSteepAtShelter;
-  const slopedY = baseDrop + steepOffset + gentleRoll;
+  const totalFlatAtShelter = computeFlatZonesElevationOffset(
+    profile.flatZones,
+    SLOPE_GRADIENT,
+    profile.length,
+  );
+  const flatY =
+    -profile.length * SLOPE_GRADIENT + totalSteepAtShelter + totalFlatAtShelter;
+  const slopedY = baseDrop + steepOffset + flatOffset + gentleRoll;
   return slopedY * (1 - shelterBlend) + flatY * shelterBlend;
 }
 

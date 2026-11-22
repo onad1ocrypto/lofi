@@ -26,10 +26,26 @@ export interface SteepDescentZone {
   extraGradient: number;
   /** Extra trail half-width added smoothly across the steep slope & landing bowl (meters). */
   extraHalfWidth: number;
-  /** Camera behavior mode ('steep' for Level 3 drop, 'carving' for Level 4 S-curve pass). Defaults to 'steep'. */
-  cameraMode?: 'steep' | 'carving';
+  /** Camera behavior mode ('steep' for Lv3, 'carving' for Lv4, 'dropJump' for Lv5, 'slalom' for Lv6, 'alley' for Lv7, 'rockGarden' for Lv8). Defaults to 'steep'. */
+  cameraMode?: 'steep' | 'carving' | 'dropJump' | 'slalom' | 'alley' | 'rockGarden';
   /** When true, active carving on snow smoothly helps bleed excess downhill speed (Level 4 Carving Pass). */
   enableCarvingSpeedControl?: boolean;
+}
+
+export interface FlatMomentumZone {
+  id: string;
+  /** Start of the flat snow section (meters). */
+  zStart: number;
+  /** End of the flat snow section (meters). */
+  zEnd: number;
+  /** Fraction of base SLOPE_GRADIENT flattened out smoothly across the plateau (0..0.85). */
+  flattenFraction: number;
+  /** Extra trail half-width added smoothly across the flat corridor (meters). */
+  extraHalfWidth: number;
+  /** Natural flat-snow cruise speed drop below level baseSpeed so momentum matters (m/s). */
+  cruiseSpeedDrop: number;
+  /** Gentle coasting deceleration rate while gliding above flat cruise speed (1/s). */
+  naturalCoastDecayRate: number;
 }
 
 export interface CarvingPassConfig {
@@ -194,8 +210,10 @@ export interface LevelConfig {
   restZones: readonly TrackRestZone[];
   /** Optional local dual-route split section (Safe lane vs Bonus ramp lane). */
   splitZone?: TrackSplitZone;
-  /** Optional reusable steep-descent challenge zones (initially enabled only on Level 3). */
+  /** Optional reusable steep-descent challenge zones. */
   steepDescents?: readonly SteepDescentZone[];
+  /** Optional flat snow momentum sections between downhills (Level 7 Avalanche Alley). */
+  flatZones?: readonly FlatMomentumZone[];
   /** Hand-authored signature obstacle formations for this level. */
   manualObstacles: readonly ManualObstacleSpec[];
 }

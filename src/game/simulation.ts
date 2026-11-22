@@ -32,8 +32,13 @@ import {
   computeCarvingSpeedBleedRate,
 } from './carvingPassLogic';
 import {
+  computeEdgeEscapeVelocity,
+  computeLevelSteeringProfile,
+} from './controlLogic';
+import {
   STEEP_DESCENT_CONFIG,
   computeSpeedSteerBalance,
+  evaluateFlatZoneAt,
   evaluateSteepDescentAt,
 } from './steepDescentLogic';
 import {
@@ -767,7 +772,12 @@ export function stepSimulation(
 
   const steer = resolveSteerAxis(input);
 
-  if (steepSample.slopeFactor > 0 && !isAirborneBeforeMove) {
+  const isGravityDescentZone =
+    steepSample.zone !== null &&
+    steepSample.zone.cameraMode !== 'slalom' &&
+    steepSample.zone.cameraMode !== 'rockGarden';
+
+  if (isGravityDescentZone && steepSample.slopeFactor > 0 && !isAirborneBeforeMove) {
     // Gravity gradually builds downhill speed on the steep slope
     const gravScale = steepSample.zone?.enableCarvingSpeedControl
       ? CARVING_PASS_CONFIG.gravityScale
@@ -794,32 +804,57 @@ export function stepSimulation(
     }
   }
 
+  const flatSample = evaluateFlatZoneAt(levelCfg.flatZones, state.distance);
+  const flatCruiseDrop =
+    flatSample.active && flatSample.zone
+      ? flatSample.zone.cruiseSpeedDrop * flatSample.factor
+      : 0;
+  const effectiveCruiseSpeed = Math.max(
+    STEEP_DESCENT_CONFIG.minBrakeSpeed + 3.0,
+    targetCruiseSpeed - flatCruiseDrop,
+  );
+
   if (brakingNow) {
     // Smooth speed-check deceleration (never stops instantly, keeps board gliding & controllable)
     state.forwardSpeed = Math.max(
       STEEP_DESCENT_CONFIG.minBrakeSpeed,
       state.forwardSpeed - STEEP_DESCENT_CONFIG.brakeDecelRate * dt,
     );
-  } else if (state.forwardSpeed < targetCruiseSpeed) {
-    const recoveryMult = state.slowdownTimer > 0 ? 0.45 : 1.0;
+  } else if (state.forwardSpeed < effectiveCruiseSpeed) {
+    const recoveryMult =
+      (state.slowdownTimer > 0 ? 0.45 : 1.0) *
+      (flatSample.active ? 1 - 0.35 * flatSample.factor : 1.0);
     state.forwardSpeed = Math.min(
-      targetCruiseSpeed,
+      effectiveCruiseSpeed,
       state.forwardSpeed + SIM_CONFIG.speedRecoveryRate * recoveryMult * dt,
     );
-  } else if (steepSample.slopeFactor <= 0.02) {
-    // Gentle momentum carry & natural deceleration back to cruise speed after steep landing or boost
-    const easeRate = state.forwardSpeed > targetCruiseSpeed + 2.2 ? 1.85 : 4.5;
+  } else if (!isGravityDescentZone || steepSample.slopeFactor <= 0.02) {
+    // Gentle momentum carry & natural deceleration back to cruise speed after steep landing or boost;
+    // on a flat snow section (Level 7), momentum decays gradually so entering with clean speed matters.
+    const easeRate =
+      flatSample.active && flatSample.zone
+        ? flatSample.zone.naturalCoastDecayRate
+        : state.forwardSpeed > effectiveCruiseSpeed + 2.2
+          ? 1.85
+          : 4.5;
     const ease = 1 - Math.exp(-easeRate * dt);
-    state.forwardSpeed += (targetCruiseSpeed - state.forwardSpeed) * ease;
+    state.forwardSpeed += (effectiveCruiseSpeed - state.forwardSpeed) * ease;
   }
 
   // Advance randomized alpine wind gusts (subtle crosswind push after opening calm grace window)
   stepWindGust(state.windGust, dt, state.levelNumber);
 
-  // Continuous lateral steering — active while braking; excessive speed makes steering & line-holding harder
+  // Continuous lateral steering — level-scaled for crisp switchbacks on Levels 6-10 while preserving Levels 1-5 baseline.
+  // Only steep-descent gravity overspeed applies steering difficulty penalty (normal cruise, flat slalom & ramp boosts never nerf turning).
+  const steerProfile = computeLevelSteeringProfile(state.levelNumber);
+  const balanceRefSpeed =
+    isGravityDescentZone &&
+    (steepSample.slopeFactor > 0.02 || state.steepPhase === 'RECOVERY')
+      ? state.levelBaseSpeed
+      : targetCruiseSpeed;
   const speedBalance = computeSpeedSteerBalance(
     state.forwardSpeed,
-    state.levelBaseSpeed,
+    balanceRefSpeed,
     state.brakeAmount,
     isAirborneBeforeMove,
   );
@@ -827,8 +862,8 @@ export function stepSimulation(
     (isAirborneBeforeMove ? SIM_CONFIG.airborneSteerFactor : 1.0) *
     speedBalance.steerAccelMult;
   const maxLatSpeed =
-    SIM_CONFIG.maxLateralSpeed *
-    (isAirborneBeforeMove ? SIM_CONFIG.airborneMaxLateralFactor : 1.0);
+    steerProfile.maxLateralSpeed *
+    (isAirborneBeforeMove ? steerProfile.airborneMaxLateralFactor : 1.0);
   const dampingRate =
     (isAirborneBeforeMove ? SIM_CONFIG.lateralDamping * 0.45 : SIM_CONFIG.lateralDamping) *
     speedBalance.lateralDampingMult;
@@ -842,12 +877,12 @@ export function stepSimulation(
     const reversing =
       (steer > 0 && state.lateralVelocity < -0.5) ||
       (steer < 0 && state.lateralVelocity > 0.5);
-    const boost = reversing && !isAirborneBeforeMove ? SIM_CONFIG.counterSteerBoost : 1.0;
-    state.lateralVelocity += steer * SIM_CONFIG.lateralAccel * accelMult * boost * dt;
+    const boost = reversing && !isAirborneBeforeMove ? steerProfile.counterSteerBoost : 1.0;
+    state.lateralVelocity += steer * steerProfile.lateralAccel * accelMult * boost * dt;
 
     const dragCoeff = isAirborneBeforeMove
       ? 0.9
-      : 1.6 * (1 - speedBalance.overspeedRatio * 0.32);
+      : steerProfile.activeDrag * (1 - speedBalance.overspeedRatio * 0.32);
     const activeDrag = Math.exp(-dragCoeff * dt);
     state.lateralVelocity *= activeDrag;
   } else {
@@ -878,17 +913,31 @@ export function stepSimulation(
   state.distance = nextDistance;
   state.lateralOffset += state.lateralVelocity * dt - trackCurveShiftX;
 
-  // Enforce clear snowbank track boundaries (outer bank wall catches the board cleanly without auto-centering)
+  // Enforce clear snowbank track boundaries (outer bank wall catches the board cleanly without auto-centering,
+  // and immediately allows crisp inward peel-off when the player actively steers away from the bank)
   const maxOffset = Math.max(
     2.5,
     getTrackHalfWidth(state.distance) - SIM_CONFIG.edgePadding,
   );
+  const trackCurveSpeedX = dt > 1e-4 ? trackCurveShiftX / dt : 0;
   if (state.lateralOffset > maxOffset) {
     state.lateralOffset = maxOffset;
-    if (state.lateralVelocity > 0) state.lateralVelocity = 0;
+    state.lateralVelocity = computeEdgeEscapeVelocity(
+      state.lateralVelocity,
+      steer,
+      1,
+      trackCurveSpeedX,
+      maxLatSpeed,
+    );
   } else if (state.lateralOffset < -maxOffset) {
     state.lateralOffset = -maxOffset;
-    if (state.lateralVelocity < 0) state.lateralVelocity = 0;
+    state.lateralVelocity = computeEdgeEscapeVelocity(
+      state.lateralVelocity,
+      steer,
+      -1,
+      trackCurveSpeedX,
+      maxLatSpeed,
+    );
   }
 
   // --- Ramp Deck Tracking & Vertical Jump State Machine (GROUNDED -> AIRBORNE -> LANDING -> GROUNDED) ---

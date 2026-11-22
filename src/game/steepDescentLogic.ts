@@ -4,6 +4,7 @@ import {
 } from './carvingPassLogic';
 import type {
   CarvingPassConfig,
+  FlatMomentumZone,
   SteepCameraPhase,
   SteepDescentZone,
 } from './types';
@@ -145,6 +146,128 @@ export function computeSteepZonesExtraHalfWidth(
   return extra;
 }
 
+export interface FlatZoneSample {
+  active: boolean;
+  /** Smooth 0..1 plateau weight inside the flat section. */
+  factor: number;
+  zone: FlatMomentumZone | null;
+}
+
+/**
+ * C^1-smooth raised-cosine plateau weight in [0, 1] over [zStart, zEnd] with smooth entry/exit shoulders.
+ */
+function computeFlatPlateauWeight(zStart: number, zEnd: number, z: number): number {
+  const span = zEnd - zStart;
+  if (span <= 0 || z <= zStart || z >= zEnd) return 0;
+  const shoulder = Math.min(24, span * 0.35);
+  if (z < zStart + shoulder) {
+    const u = (z - zStart) / shoulder;
+    return 0.5 * (1 - Math.cos(Math.PI * u));
+  }
+  if (z > zEnd - shoulder) {
+    const v = (z - (zEnd - shoulder)) / shoulder;
+    return 0.5 * (1 + Math.cos(Math.PI * v));
+  }
+  return 1;
+}
+
+/**
+ * Smooth gradient reduction subtracted from base SLOPE_GRADIENT across any flat momentum section.
+ */
+export function computeFlatZonesGradientReduction(
+  zones: readonly FlatMomentumZone[] | undefined,
+  baseSlopeGradient: number,
+  z: number,
+): number {
+  if (!zones || zones.length === 0) return 0;
+  let total = 0;
+  for (let i = 0; i < zones.length; i++) {
+    const zone = zones[i];
+    const w = computeFlatPlateauWeight(zone.zStart, zone.zEnd, z);
+    if (w > 0) {
+      total += baseSlopeGradient * Math.max(0, Math.min(0.85, zone.flattenFraction)) * w;
+    }
+  }
+  return Math.min(baseSlopeGradient * 0.9, total);
+}
+
+/**
+ * Exact analytical elevation integral of `computeFlatZonesGradientReduction` from -inf to z.
+ * Always returns >= 0 (flattening reduces downward drop) and stays permanently offset past zEnd
+ * so downstream terrain and shelter remain 100% seamless with zero vertical seams.
+ */
+export function computeFlatZonesElevationOffset(
+  zones: readonly FlatMomentumZone[] | undefined,
+  baseSlopeGradient: number,
+  z: number,
+): number {
+  if (!zones || zones.length === 0) return 0;
+  let offset = 0;
+  for (let i = 0; i < zones.length; i++) {
+    const zone = zones[i];
+    if (z <= zone.zStart) continue;
+    const span = zone.zEnd - zone.zStart;
+    if (span <= 0) continue;
+    const shoulder = Math.min(24, span * 0.35);
+    const flatGrad = baseSlopeGradient * Math.max(0, Math.min(0.85, zone.flattenFraction));
+    const plateauLen = Math.max(0, span - 2 * shoulder);
+
+    if (z >= zone.zEnd) {
+      offset += flatGrad * (plateauLen + shoulder);
+      continue;
+    }
+
+    if (z <= zone.zStart + shoulder) {
+      const u = (z - zone.zStart) / shoulder;
+      offset += flatGrad * shoulder * (0.5 * u - Math.sin(Math.PI * u) / (2 * Math.PI));
+    } else if (z <= zone.zEnd - shoulder) {
+      offset += flatGrad * (0.5 * shoulder + (z - (zone.zStart + shoulder)));
+    } else {
+      const v = (z - (zone.zEnd - shoulder)) / shoulder;
+      const rampDownIntegral =
+        shoulder * (0.5 * v + Math.sin(Math.PI * v) / (2 * Math.PI));
+      offset += flatGrad * (0.5 * shoulder + plateauLen + rampDownIntegral);
+    }
+  }
+  return offset;
+}
+
+/** Smooth extra trail half-width across flat momentum sections. */
+export function computeFlatZonesExtraHalfWidth(
+  zones: readonly FlatMomentumZone[] | undefined,
+  z: number,
+): number {
+  if (!zones || zones.length === 0) return 0;
+  let extra = 0;
+  for (let i = 0; i < zones.length; i++) {
+    const zone = zones[i];
+    const shoulder = 24;
+    if (z <= zone.zStart - shoulder || z >= zone.zEnd + shoulder) continue;
+    const up = smoothstep01((z - (zone.zStart - shoulder)) / shoulder);
+    const down = smoothstep01((zone.zEnd + shoulder - z) / shoulder);
+    extra = Math.max(extra, zone.extraHalfWidth * Math.min(up, down));
+  }
+  return extra;
+}
+
+/** Evaluate whether distance `z` lies inside a flat momentum section and its smooth 0..1 weight. */
+export function evaluateFlatZoneAt(
+  zones: readonly FlatMomentumZone[] | undefined,
+  z: number,
+): FlatZoneSample {
+  if (!zones || zones.length === 0) {
+    return { active: false, factor: 0, zone: null };
+  }
+  for (let i = 0; i < zones.length; i++) {
+    const zone = zones[i];
+    const w = computeFlatPlateauWeight(zone.zStart, zone.zEnd, z);
+    if (w > 0.001) {
+      return { active: true, factor: w, zone };
+    }
+  }
+  return { active: false, factor: 0, zone: null };
+}
+
 /**
  * Evaluate which steep-descent state (NORMAL / APPROACH / DESCENT / RECOVERY) applies at distance `z`.
  */
@@ -169,11 +292,13 @@ export function evaluateSteepDescentAt(
 
     if (z < approachStart || z > recoveryEnd) continue;
 
+    const suppressWarning =
+      zone.cameraMode === 'slalom' || zone.cameraMode === 'rockGarden';
     if (z < zone.zStart) {
       return {
         phase: 'APPROACH',
         zone,
-        warningActive: true,
+        warningActive: !suppressWarning,
         slopeFactor: 0,
         extraGradient: 0,
       };
@@ -187,7 +312,9 @@ export function evaluateSteepDescentAt(
       return {
         phase: 'DESCENT',
         zone,
-        warningActive: z <= zone.zStart + STEEP_DESCENT_CONFIG.warningHoldIntoDropMeters,
+        warningActive:
+          !suppressWarning &&
+          z <= zone.zStart + STEEP_DESCENT_CONFIG.warningHoldIntoDropMeters,
         slopeFactor,
         extraGradient: zone.extraGradient * slopeFactor,
       };
@@ -236,16 +363,124 @@ export function resetSteepCameraRigState(state: SteepCameraRigState): void {
 /**
  * Target rear-chase camera offsets for each SteepCameraPhase:
  * Always strictly behind Lofi — elevates & pulls back to reveal the steep slope and wide landing area.
- * For `cameraMode === 'carving'` (Level 4), keeps the normal behind-character chase framing close
- * with only a subtle readability lift while shifting smoothly toward the outside of each S-curve.
+ * - `cameraMode === 'carving'` (Level 4): keeps chase framing close while shifting toward curve outside.
+ * - `cameraMode === 'dropJump'` (Level 5): gently raises & pulls back across the short downhill and ramp
+ *   jump so both Lofi and the wide landing area stay clearly visible, then smoothly returns after landing.
  */
 export function computeSteepCameraTargetOffsets(
   phase: SteepCameraPhase,
   slopeFactor: number,
   isPortrait: boolean,
-  cameraMode: 'steep' | 'carving' = 'steep',
+  cameraMode: 'steep' | 'carving' | 'dropJump' | 'slalom' | 'alley' | 'rockGarden' = 'steep',
+  keepElevatedForJump = false,
 ): SteepCameraTargetOffsets {
   const pScale = isPortrait ? 1.12 : 1.0;
+
+  if (cameraMode === 'rockGarden') {
+    if (phase === 'APPROACH') {
+      return {
+        extraBack: 1.65 * pScale,
+        extraHeight: 1.6 * pScale,
+        extraLookAhead: 7.5 * pScale,
+        lookDownBias: -0.75 * pScale,
+      };
+    }
+    if (phase === 'DESCENT') {
+      return {
+        extraBack: 2.9 * pScale,
+        extraHeight: 2.85 * pScale,
+        extraLookAhead: 12.8 * pScale,
+        lookDownBias: -1.25 * pScale,
+      };
+    }
+    return {
+      extraBack: 0,
+      extraHeight: 0,
+      extraLookAhead: 0,
+      lookDownBias: 0,
+    };
+  }
+
+  if (cameraMode === 'alley') {
+    if (phase === 'APPROACH') {
+      return {
+        extraBack: 1.6 * pScale,
+        extraHeight: 1.45 * pScale,
+        extraLookAhead: 7.0 * pScale,
+        lookDownBias: -0.75 * pScale,
+      };
+    }
+    if (phase === 'DESCENT') {
+      const boost = 0.78 + 0.22 * Math.max(0, Math.min(1, slopeFactor));
+      return {
+        extraBack: 3.1 * boost * pScale,
+        extraHeight: 2.75 * boost * pScale,
+        extraLookAhead: 12.5 * boost * pScale,
+        lookDownBias: -1.55 * boost * pScale,
+      };
+    }
+    // Flat section (NORMAL) and post-downhill RECOVERY both smoothly return to normal chase camera
+    return {
+      extraBack: 0,
+      extraHeight: 0,
+      extraLookAhead: 0,
+      lookDownBias: 0,
+    };
+  }
+
+  if (cameraMode === 'slalom') {
+    if (phase === 'APPROACH') {
+      return {
+        extraBack: 1.45 * pScale,
+        extraHeight: 1.4 * pScale,
+        extraLookAhead: 6.5 * pScale,
+        lookDownBias: -0.65 * pScale,
+      };
+    }
+    if (phase === 'DESCENT') {
+      return {
+        extraBack: 2.65 * pScale,
+        extraHeight: 2.6 * pScale,
+        extraLookAhead: 11.5 * pScale,
+        lookDownBias: -1.15 * pScale,
+      };
+    }
+    return {
+      extraBack: 0,
+      extraHeight: 0,
+      extraLookAhead: 0,
+      lookDownBias: 0,
+    };
+  }
+
+  if (cameraMode === 'dropJump') {
+    if (phase === 'APPROACH') {
+      return {
+        extraBack: 1.55 * pScale,
+        extraHeight: 1.35 * pScale,
+        extraLookAhead: 6.5 * pScale,
+        lookDownBias: -0.7 * pScale,
+      };
+    }
+    if (phase === 'DESCENT' || (phase === 'RECOVERY' && keepElevatedForJump)) {
+      const boost =
+        phase === 'DESCENT'
+          ? 0.78 + 0.22 * Math.max(0, Math.min(1, slopeFactor))
+          : 1.0;
+      return {
+        extraBack: 2.95 * boost * pScale,
+        extraHeight: 2.55 * boost * pScale,
+        extraLookAhead: 12.0 * boost * pScale,
+        lookDownBias: -1.45 * boost * pScale,
+      };
+    }
+    return {
+      extraBack: 0,
+      extraHeight: 0,
+      extraLookAhead: 0,
+      lookDownBias: 0,
+    };
+  }
 
   if (cameraMode === 'carving') {
     if (phase === 'APPROACH') {
@@ -302,7 +537,7 @@ export function computeSteepCameraTargetOffsets(
 }
 
 /**
- * Smooth exponential damping step for steep-descent & carving-pass camera offsets (~0.95-1.2s 95% transition).
+ * Smooth exponential damping step for steep-descent, carving-pass, & drop-jump camera offsets (~0.95-1.2s 95% transition).
  */
 export function stepSteepCameraRigState(
   state: SteepCameraRigState,
@@ -312,23 +547,34 @@ export function stepSteepCameraRigState(
   dt: number,
   immediate = false,
   options?: {
-    cameraMode?: 'steep' | 'carving';
+    cameraMode?: 'steep' | 'carving' | 'dropJump' | 'slalom' | 'alley' | 'rockGarden';
     carvingPass?: CarvingPassConfig;
     playerDistance?: number;
+    playerJumpHeight?: number;
+    activeZone?: SteepDescentZone;
   },
 ): SteepCameraRigState {
   state.phase = phase;
   const cameraMode = options?.cameraMode ?? 'steep';
+  const playerDist = options?.playerDistance ?? 0;
+  const jumpHeight = options?.playerJumpHeight ?? 0;
+  const zoneEnd = options?.activeZone?.zEnd;
+  const keepElevatedForJump =
+    cameraMode === 'dropJump' &&
+    phase === 'RECOVERY' &&
+    (jumpHeight > 0.12 ||
+      (zoneEnd !== undefined && playerDist >= zoneEnd && playerDist <= zoneEnd + 22));
   const target = computeSteepCameraTargetOffsets(
     phase,
     slopeFactor,
     isPortrait,
     cameraMode,
+    keepElevatedForJump,
   );
   const curveTarget = computeCarvingCameraOutsideTarget(
     options?.carvingPass,
     phase,
-    options?.playerDistance ?? 0,
+    playerDist,
     isPortrait,
   );
 
@@ -343,8 +589,15 @@ export function stepSteepCameraRigState(
   }
 
   const tau =
-    phase === 'RECOVERY'
-      ? STEEP_DESCENT_CONFIG.cameraTransitionTau * 1.1
+    phase === 'RECOVERY' || phase === 'NORMAL'
+      ? STEEP_DESCENT_CONFIG.cameraTransitionTau *
+        ((cameraMode === 'dropJump' && !keepElevatedForJump) ||
+        cameraMode === 'slalom' ||
+        cameraMode === 'rockGarden'
+          ? 1.32
+          : cameraMode === 'alley'
+            ? 1.15
+            : 1.1)
       : STEEP_DESCENT_CONFIG.cameraTransitionTau;
   const alpha = 1 - Math.exp(-dt / Math.max(0.05, tau));
 
