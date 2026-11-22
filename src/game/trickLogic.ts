@@ -57,6 +57,8 @@ export interface TrickLandingInput {
   minGrabHoldSeconds: number;
   peakAirHeight: number;
   launchedFromRamp: boolean;
+  /** True when Lofi cleanly jumped over at least one track obstacle (fallen log, rock, pine) during this jump. */
+  clearedObstacle: boolean;
   grabStyle: GrabTrickStyle;
   currentMultiplier: number;
   currentTimer: number;
@@ -65,9 +67,9 @@ export interface TrickLandingInput {
 export interface TrickLandingResult {
   /** Whether a Grab trick was cleanly completed on this landing. */
   awardedGrab: boolean;
-  /** Whether any stylish maneuver (Grab or clean Air) awarded points. */
+  /** Whether any stylish maneuver (Grab, Ramp Air, or Obstacle Clear) awarded points. */
   awardedTrick: boolean;
-  /** Display label for HUD toast (e.g., "INDY GRAB", "BIG AIR", or null). */
+  /** Display label for HUD toast (e.g., "INDY GRAB", "RAMP AIR", "OBSTACLE CLEAR", or null). */
   label: string | null;
   /** Final points awarded (already multiplied by the active scoreMultiplier). */
   points: number;
@@ -79,9 +81,12 @@ export interface TrickLandingResult {
 
 /**
  * Evaluate trick points and score multiplier progression cleanly on touchdown.
- * - Clean Grab trick: awards grabBasePoints (+ bigAirGrabBonus if ramp/big-air/long-hold) × currentMultiplier,
- *   increments multiplier by +1 (up to 5x), and refills the combo timer.
- * - Clean Air jump (no grab, peak height >= minAirTrickHeight): awards cleanAirBasePoints × currentMultiplier
+ * Anti-farming rule:
+ * - Plain flat-ground jumps and flat-ground grabs (neither launched off a ramp nor clearing an obstacle)
+ *   strictly award 0 points, 0 multiplier gain, and 0 combo timer refresh.
+ * - Clean Grab trick off a ramp or over an obstacle: awards grabBasePoints (+ bigAirGrabBonus on ramps/big air)
+ *   × currentMultiplier, increments multiplier by +1 (up to 5x), and refills the combo timer.
+ * - Clean Air jump off a ramp or over an obstacle (no grab): awards ramp/obstacle clear points × currentMultiplier
  *   and refreshes the combo timer if a multiplier > 1x is already active.
  */
 export function evaluateTrickLanding(input: TrickLandingInput): TrickLandingResult {
@@ -89,6 +94,19 @@ export function evaluateTrickLanding(input: TrickLandingInput): TrickLandingResu
     TRICK_CONFIG.minMultiplier,
     Math.min(TRICK_CONFIG.maxMultiplier, Math.floor(input.currentMultiplier)),
   );
+
+  // Strict anti-farming guard: empty flat-snow jumps/grabs NEVER award score or multiplier!
+  const earnedByFeature = input.launchedFromRamp || input.clearedObstacle;
+  if (!earnedByFeature) {
+    return {
+      awardedGrab: false,
+      awardedTrick: false,
+      label: null,
+      points: 0,
+      nextMultiplier: safeMult,
+      nextTimer: input.currentTimer,
+    };
+  }
 
   if (input.grabbed && input.grabHoldTime >= input.minGrabHoldSeconds) {
     const isBigAir =
@@ -112,12 +130,12 @@ export function evaluateTrickLanding(input: TrickLandingInput): TrickLandingResu
     };
   }
 
-  if (input.peakAirHeight >= TRICK_CONFIG.minAirTrickHeight) {
+  if (input.peakAirHeight >= TRICK_CONFIG.minAirTrickHeight || input.clearedObstacle) {
     const basePoints = input.launchedFromRamp
       ? TRICK_CONFIG.cleanAirBasePoints + 25
       : TRICK_CONFIG.cleanAirBasePoints;
     const points = basePoints * safeMult;
-    const label = input.launchedFromRamp ? 'RAMP AIR' : 'CLEAN JUMP';
+    const label = input.launchedFromRamp ? 'RAMP AIR' : 'OBSTACLE CLEAR';
     const nextTimer =
       safeMult > TRICK_CONFIG.minMultiplier
         ? TRICK_CONFIG.comboDurationSeconds

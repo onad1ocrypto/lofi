@@ -2708,7 +2708,7 @@ test('continuous 2-track BGM playlist plays Track 1 then Track 2 then loops back
   );
   assert.ok(playingDanger > playingSafe && playingDanger <= 0.38);
   assert.ok(
-    playingDucked < playingSafe * 0.85 && playingDucked > playingSafe * 0.65,
+    playingDucked < playingSafe * 0.88 && playingDucked > playingSafe * 0.72,
     `Expected subtle musical SFX ducking without pumping BGM (safe=${playingSafe}, ducked=${playingDucked})`,
   );
   assert.ok(pausedVol > 0 && pausedVol < playingSafe);
@@ -2717,9 +2717,9 @@ test('continuous 2-track BGM playlist plays Track 1 then Track 2 then loops back
   assert.equal(computeBgmTargetVolume('gameover', false, 0, 0), 0);
   assert.equal(computeBgmTargetVolume('playing', true, 1, 0), 0);
 
-  // Moderated SFX master & one-shot bus gains avoid over-boosting above the background music
-  assert.ok(SFX_MIX_CONFIG.spatialMasterGain > 0.7 && SFX_MIX_CONFIG.spatialMasterGain <= 1.0);
-  assert.ok(SFX_MIX_CONFIG.oneShotBusGain >= 0.85 && SFX_MIX_CONFIG.oneShotBusGain <= 1.15);
+  // Softened SFX master & one-shot bus gains keep sound effects gentle below the background music
+  assert.ok(SFX_MIX_CONFIG.spatialMasterGain >= 0.35 && SFX_MIX_CONFIG.spatialMasterGain <= 0.55);
+  assert.ok(SFX_MIX_CONFIG.oneShotBusGain >= 0.45 && SFX_MIX_CONFIG.oneShotBusGain <= 0.65);
 
   // Dynamic duck envelope holds peak briefly then releases smoothly to 0
   assert.equal(computeActiveSfxDuck(1050, 0.9, 1000, 400), 0.9);
@@ -3760,34 +3760,73 @@ test('Level 3 steep-descent challenge: terrain, warning, gravity/brake balance, 
   assert.equal(buildHudSnapshot(convoySim, null).hasSteepDescent, true);
 });
 
-test('trick system: dedicated Trick jump+grab flow, named grab styles, score multiplier escalation, collectible bonus, crash/timeout decay, and clean resets', () => {
-  // 1. Pure trick style selection & scoring math
+test('trick system & anti-farming score audit: zero score from flat-ground jump/grab spam, finite ramp & obstacle-clear tricks, collectible multiplier, crash/timeout decay, and clean resets', () => {
+  // 1. Pure trick style selection & anti-farming scoring math
   assert.equal(selectGrabTrickStyle(0, false, 0), 'INDY');
   assert.equal(selectGrabTrickStyle(-0.8, false, 0), 'METHOD');
   assert.equal(selectGrabTrickStyle(0.8, false, 0), 'TAIL');
   assert.equal(selectGrabTrickStyle(0, true, 1), 'NOSE');
 
-  const firstGrab = evaluateTrickLanding({
+  // Empty flat-snow jumps & flat-snow grabs MUST strictly award 0 points, 0 multiplier, 0 timer refresh
+  const flatPlainJump = evaluateTrickLanding({
+    grabbed: false,
+    grabHoldTime: 0,
+    minGrabHoldSeconds: SIM_CONFIG.minGrabHoldSeconds,
+    peakAirHeight: 2.35,
+    launchedFromRamp: false,
+    clearedObstacle: false,
+    grabStyle: 'INDY',
+    currentMultiplier: 2,
+    currentTimer: 3.0,
+  });
+  assert.equal(flatPlainJump.awardedTrick, false);
+  assert.equal(flatPlainJump.awardedGrab, false);
+  assert.equal(flatPlainJump.points, 0);
+  assert.equal(flatPlainJump.label, null);
+  assert.equal(flatPlainJump.nextMultiplier, 2);
+  assert.equal(flatPlainJump.nextTimer, 3.0);
+
+  const flatGrabSpam = evaluateTrickLanding({
+    grabbed: true,
+    grabHoldTime: 0.45,
+    minGrabHoldSeconds: SIM_CONFIG.minGrabHoldSeconds,
+    peakAirHeight: 2.35,
+    launchedFromRamp: false,
+    clearedObstacle: false,
+    grabStyle: 'INDY',
+    currentMultiplier: 1,
+    currentTimer: 0,
+  });
+  assert.equal(flatGrabSpam.awardedTrick, false);
+  assert.equal(flatGrabSpam.awardedGrab, false);
+  assert.equal(flatGrabSpam.points, 0);
+  assert.equal(flatGrabSpam.nextMultiplier, 1);
+
+  // Obstacle-clear Grab trick awards base grab points & raises multiplier
+  const firstObstacleGrab = evaluateTrickLanding({
     grabbed: true,
     grabHoldTime: 0.25,
     minGrabHoldSeconds: SIM_CONFIG.minGrabHoldSeconds,
     peakAirHeight: 1.6,
     launchedFromRamp: false,
+    clearedObstacle: true,
     grabStyle: 'INDY',
     currentMultiplier: 1,
     currentTimer: 0,
   });
-  assert.equal(firstGrab.awardedGrab, true);
-  assert.equal(firstGrab.points, TRICK_CONFIG.grabBasePoints);
-  assert.equal(firstGrab.nextMultiplier, 2);
-  assert.equal(firstGrab.label, 'INDY GRAB');
+  assert.equal(firstObstacleGrab.awardedGrab, true);
+  assert.equal(firstObstacleGrab.points, TRICK_CONFIG.grabBasePoints);
+  assert.equal(firstObstacleGrab.nextMultiplier, 2);
+  assert.equal(firstObstacleGrab.label, 'INDY GRAB');
 
+  // Ramp Big Air Grab awards base + big-air bonus × multiplier
   const rampBigGrab = evaluateTrickLanding({
     grabbed: true,
     grabHoldTime: 0.5,
     minGrabHoldSeconds: SIM_CONFIG.minGrabHoldSeconds,
     peakAirHeight: 3.1,
     launchedFromRamp: true,
+    clearedObstacle: false,
     grabStyle: 'METHOD',
     currentMultiplier: 3,
     currentTimer: 5,
@@ -3806,82 +3845,157 @@ test('trick system: dedicated Trick jump+grab flow, named grab styles, score mul
     minGrabHoldSeconds: SIM_CONFIG.minGrabHoldSeconds,
     peakAirHeight: 1.6,
     launchedFromRamp: false,
+    clearedObstacle: true,
     grabStyle: 'TAIL',
     currentMultiplier: TRICK_CONFIG.maxMultiplier,
     currentTimer: 4,
   });
   assert.equal(cappedGrab.nextMultiplier, TRICK_CONFIG.maxMultiplier);
 
-  // 2. Full simulation: Trick jump + hold grab -> clean landing awards points & raises multiplier 1x -> 2x -> 3x
+  // 2. Full simulation ANTI-FARMING test: spamming Jump & Grab repeatedly from the start on open snow = 0 score!
   const sim = createInitialSimulationState('playing', 4242, 1);
   sim.obstacles = [];
+  sim.ramps = [];
   sim.collectibles = [];
   sim.windGust.cooldown = 999;
 
-  const performTrickJumpAndLand = (steerLeft = false, steerRight = false) => {
-    const inp = createInitialInput();
-    inp.jumpQueued = true;
-    inp.grab = true;
-    inp.left = steerLeft;
-    inp.right = steerRight;
-    let landedGrab = false;
-    let sawAirborneGrab = false;
-    let startedGrabCount = 0;
-    for (let i = 0; i < 90; i++) {
-      // Hold grab while rising/peaking, then release briefly before touchdown
+  for (let spam = 0; spam < 6; spam++) {
+    const spamIn = createInitialInput();
+    spamIn.jumpQueued = true;
+    spamIn.grab = spam % 2 === 1; // alternate plain jumps and Jump+Grab spam!
+    for (let i = 0; i < 80; i++) {
       if (sim.jumpState === 'AIRBORNE' && sim.verticalVelocity < -4.2) {
-        inp.grab = false;
+        spamIn.grab = false;
       }
-      const ev = stepSimulation(sim, inp, 0.025);
-      if (ev.startedGrab) startedGrabCount += 1;
-      if (sim.jumpState === 'AIRBORNE' && sim.grabAmount > 0.35) {
-        sawAirborneGrab = true;
+      const ev = stepSimulation(sim, spamIn, 0.025);
+      if (sim.jumpState === 'AIRBORNE' && sim.grabAmount > 0.3) {
+        assert.equal(
+          buildHudSnapshot(sim, null).canScoreCurrentGrab,
+          false,
+          'Flat-ground grab must NOT show score multiplier preview in HUD',
+        );
       }
-      if (ev.landedGrabTrick) {
-        landedGrab = true;
+      if (ev.landed) {
+        assert.equal(ev.landedGrabTrick, false, 'Flat-ground jump spam must never fire landedGrabTrick');
+        assert.equal(ev.landedTrickPoints, 0, 'Flat-ground jump spam must award 0 points');
         break;
       }
-      if (ev.landed) break;
     }
-    // Let landing recovery settle before next jump
-    const settleIn = createInitialInput();
-    for (let i = 0; i < 12; i++) {
-      stepSimulation(sim, settleIn, 0.025);
+    const settle = createInitialInput();
+    for (let i = 0; i < 10; i++) stepSimulation(sim, settle, 0.025);
+  }
+  assert.equal(sim.score, 0, 'Repeated jumping/grabbing on open snow must strictly yield 0 score');
+  assert.equal(sim.grabCount, 0, 'Repeated flat-ground grabs must not increment grabCount');
+  assert.equal(sim.scoreMultiplier, 1, 'Repeated flat-ground jumps must keep multiplier at 1x');
+  assert.equal(sim.lastTrickLabel, null);
+
+  // 3. Legitimate scoring: Ramp launch + Grab -> awards Ramp Grab & raises multiplier 1x -> 2x (and deduplicates ramp ID)
+  const rampZ = Math.round(sim.distance + 8);
+  sim.ramps = [
+    {
+      id: 901,
+      zStart: rampZ,
+      length: 13.0,
+      height: 2.3,
+      width: 6.0,
+      offsetX: sim.lateralOffset,
+      launchVy: 11.8,
+      landingClearMeters: 45,
+      kind: 'medium',
+    },
+  ];
+  let landedRampGrab = false;
+  let sawEligibleHud = false;
+  for (let i = 0; i < 160; i++) {
+    const inp = createInitialInput();
+    if (sim.jumpState === 'AIRBORNE' && sim.verticalVelocity > -4.2) {
+      inp.grab = true;
     }
-    return { landedGrab, sawAirborneGrab, startedGrabCount };
-  };
-
-  assert.equal(sim.score, 0);
-  assert.equal(sim.scoreMultiplier, 1);
-  assert.equal(sim.peakMultiplier, 1);
-
-  const trick1 = performTrickJumpAndLand(false, false);
-  assert.equal(trick1.sawAirborneGrab, true, 'Holding Trick button through jump must activate mid-air grab');
-  assert.equal(trick1.startedGrabCount, 1, 'startedGrab edge event must fire exactly once per grab');
-  assert.equal(trick1.landedGrab, true, 'First trick jump+grab must award cleanly on landing');
+    const ev = stepSimulation(sim, inp, 0.025);
+    if (sim.jumpState === 'AIRBORNE' && sim.grabAmount > 0.3) {
+      if (buildHudSnapshot(sim, null).canScoreCurrentGrab) sawEligibleHud = true;
+    }
+    if (ev.landed) {
+      landedRampGrab = ev.landedGrabTrick;
+      break;
+    }
+  }
+  assert.equal(sawEligibleHud, true, 'Ramp grab must show live trick HUD eligibility');
+  assert.equal(landedRampGrab, true, 'Ramp launch + mid-air grab must award cleanly on landing');
   assert.equal(sim.grabCount, 1);
-  assert.equal(sim.scoreMultiplier, 2, 'First landed grab must escalate score multiplier to 2x');
-  assert.equal(sim.peakMultiplier, 2, 'peakMultiplier must record highest multiplier reached');
-  assert.ok(sim.score >= TRICK_CONFIG.grabBasePoints, `Score must increase on landed grab (got ${sim.score})`);
-  assert.ok(sim.lastTrickLabel && sim.lastTrickLabel.includes('GRAB'));
-
-  const hudAfter1 = buildHudSnapshot(sim, null);
-  assert.equal(hudAfter1.scoreMultiplier, 2);
-  assert.ok(hudAfter1.multiplierTimerRatio > 0.5);
-  assert.equal(hudAfter1.lastTrickLabel, sim.lastTrickLabel);
-  assert.ok(hudAfter1.lastTrickPoints >= TRICK_CONFIG.grabBasePoints);
-
-  const scoreAfter1 = sim.score;
-  const trick2 = performTrickJumpAndLand(true, false);
-  assert.equal(trick2.landedGrab, true);
-  assert.equal(sim.grabCount, 2);
-  assert.equal(sim.scoreMultiplier, 3, 'Second chained grab must escalate score multiplier to 3x');
-  assert.ok(
-    sim.score - scoreAfter1 >= TRICK_CONFIG.grabBasePoints * 2,
-    `Second grab at 2x must award at least 2x base points (delta=${sim.score - scoreAfter1})`,
+  assert.equal(sim.scoreMultiplier, 2, 'First landed ramp grab must escalate score multiplier to 2x');
+  assert.equal(sim.peakMultiplier, 2);
+  assert.equal(
+    sim.score,
+    TRICK_CONFIG.grabBasePoints + TRICK_CONFIG.bigAirGrabBonus,
+    `Ramp big-air grab at 1x must award exact ramp grab points (got ${sim.score})`,
   );
+  assert.ok(sim.scoredRampIds.includes(901), 'Scored ramp ID must be recorded to prevent repeat farming');
 
-  // 3. Lil Yeti collectible collected while multiplier = 3x awards 3x collectible points & refreshes timer
+  // Re-running the same ramp ID (901) must award 0 points (deduplication check)
+  const scoreAfterRamp1 = sim.score;
+  const dupRampZ = Math.round(sim.distance + 8);
+  sim.ramps = [{ ...sim.ramps[0], id: 901, zStart: dupRampZ, offsetX: sim.lateralOffset }];
+  for (let i = 0; i < 160; i++) {
+    const inp = createInitialInput();
+    if (sim.jumpState === 'AIRBORNE' && sim.verticalVelocity > -4.2) inp.grab = true;
+    const ev = stepSimulation(sim, inp, 0.025);
+    if (ev.landed) break;
+  }
+  assert.equal(sim.score, scoreAfterRamp1, 'Same ramp ID must never award points twice in one run');
+  sim.ramps = [];
+
+  // 4. Legitimate scoring: Jumping cleanly OVER a fallen log + Grab -> awards Obstacle Grab at 2x -> escalates to 3x
+  const settle2 = createInitialInput();
+  for (let i = 0; i < 10; i++) stepSimulation(sim, settle2, 0.025);
+  const logZ = sim.distance + 6.5;
+  const logWorldX = getTrackCenterX(logZ);
+  sim.obstacles = [
+    {
+      id: 801,
+      kind: 'fallen_log',
+      z: logZ,
+      offsetX: 0,
+      worldX: logWorldX,
+      worldY: 0,
+      radius: 1.0,
+      barHalfWidth: 11.0,
+      halfDepthZ: 0.72,
+      clearanceHeight: 1.05,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+      rotationY: 0,
+      tiltX: 0,
+      tiltZ: 0,
+      tint: 1,
+      hit: false,
+    },
+  ];
+  const scoreBeforeLogGrab = sim.score;
+  const logJumpIn = createInitialInput();
+  logJumpIn.jumpQueued = true;
+  logJumpIn.grab = true;
+  let landedLogGrab = false;
+  for (let i = 0; i < 90; i++) {
+    if (sim.jumpState === 'AIRBORNE' && sim.verticalVelocity < -4.2) logJumpIn.grab = false;
+    const ev = stepSimulation(sim, logJumpIn, 0.025);
+    if (ev.landed) {
+      landedLogGrab = ev.landedGrabTrick;
+      break;
+    }
+  }
+  assert.equal(landedLogGrab, true, 'Jumping cleanly over a fallen log with Grab must award trick points');
+  assert.equal(sim.grabCount, 2);
+  assert.equal(sim.scoreMultiplier, 3, 'Chained obstacle grab must escalate multiplier to 3x');
+  assert.ok(
+    sim.score - scoreBeforeLogGrab >= TRICK_CONFIG.grabBasePoints * 2,
+    `Obstacle grab at 2x must award at least 2x grabBasePoints (delta=${sim.score - scoreBeforeLogGrab})`,
+  );
+  assert.ok(sim.scoredObstacleIds.includes(801), 'Cleared obstacle ID must be recorded to prevent repeat farming');
+
+  // 5. Lil Yeti collectible collected while multiplier = 3x awards 3x collectible points & refreshes timer
   const multPickup = applyCollectibleMultiplier(COLLECTIBLE_CONFIG.pointsPerLilYeti, 3, 2.0);
   assert.equal(multPickup.points, COLLECTIBLE_CONFIG.pointsPerLilYeti * 3);
   assert.ok(multPickup.nextTimer > 2.0);
@@ -3911,9 +4025,34 @@ test('trick system: dedicated Trick jump+grab flow, named grab styles, score mul
     'Collectible pickup during 3x multiplier must award 3x points',
   );
 
-  // 4. Clean air jump (without grab) awards clean air points and refreshes active combo timer
+  // 6. Ungrabbed jump over a second obstacle awards OBSTACLE CLEAR (50 × 3 = 150) & refreshes timer
+  for (let i = 0; i < 10; i++) stepSimulation(sim, settle2, 0.025);
   sim.multiplierTimer = 2.0;
-  const scoreBeforeAir = sim.score;
+  const scoreBeforeObsAir = sim.score;
+  const log2Z = sim.distance + 6.5;
+  sim.obstacles = [
+    {
+      id: 802,
+      kind: 'fallen_log',
+      z: log2Z,
+      offsetX: 0,
+      worldX: getTrackCenterX(log2Z),
+      worldY: 0,
+      radius: 1.0,
+      barHalfWidth: 11.0,
+      halfDepthZ: 0.72,
+      clearanceHeight: 1.05,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+      rotationY: 0,
+      tiltX: 0,
+      tiltZ: 0,
+      tint: 1,
+      hit: false,
+    },
+  ];
   const jumpOnlyIn = createInitialInput();
   jumpOnlyIn.jumpQueued = true;
   for (let i = 0; i < 80; i++) {
@@ -3921,19 +4060,20 @@ test('trick system: dedicated Trick jump+grab flow, named grab styles, score mul
     if (ev.landed) break;
   }
   assert.equal(
-    sim.score - scoreBeforeAir,
+    sim.score - scoreBeforeObsAir,
     TRICK_CONFIG.cleanAirBasePoints * 3,
-    'Clean ungrabbed jump during 3x multiplier must award 3x clean air points',
+    'Clean ungrabbed obstacle jump during 3x multiplier must award 3x obstacle clear points',
   );
-  assert.ok(sim.multiplierTimer > 7.0, 'Clean air jump must refresh combo decay timer');
-  assert.equal(sim.grabCount, 2, 'Ungrabbed jump must not increment grabCount');
+  assert.equal(sim.lastTrickLabel, 'OBSTACLE CLEAR');
+  assert.ok(sim.multiplierTimer > 7.0, 'Obstacle clear jump must refresh active combo timer');
+  assert.equal(sim.grabCount, 2, 'Ungrabbed obstacle clear must not increment grabCount');
 
-  // 5. Combo decay timer expiration resets multiplier cleanly to 1x
+  // 7. Combo decay timer expiration resets multiplier cleanly to 1x
   const expired = stepTrickMultiplierTimer(3, 0.5, 1.0);
   assert.equal(expired.multiplier, 1);
   assert.equal(expired.timer, 0);
 
-  // 6. Hitting an obstacle breaks active combo multiplier back to 1x
+  // 8. Hitting an obstacle breaks active combo multiplier back to 1x
   sim.scoreMultiplier = 4;
   sim.multiplierTimer = 6.0;
   sim.invulnTimer = 0;
@@ -3965,7 +4105,7 @@ test('trick system: dedicated Trick jump+grab flow, named grab styles, score mul
   assert.equal(sim.scoreMultiplier, 1, 'Obstacle collision must reset active score multiplier to 1x');
   assert.equal(sim.multiplierTimer, 0);
 
-  // 7. Retry, Victory frozen outcome summary, Next Level, and Start New Game reset trick stats cleanly
+  // 9. Retry, Victory frozen outcome summary, Next Level, and Start New Game reset all score & dedup state cleanly
   sim.score = 1250;
   sim.scoreMultiplier = 4;
   sim.peakMultiplier = 4;
@@ -3978,6 +4118,8 @@ test('trick system: dedicated Trick jump+grab flow, named grab styles, score mul
   assert.equal(sim.multiplierTimer, 0);
   assert.equal(sim.lastTrickLabel, null);
   assert.equal(sim.grabCount, 0);
+  assert.equal(sim.scoredRampIds.length, 0);
+  assert.equal(sim.scoredObstacleIds.length, 0);
 
   sim.score = 900;
   sim.grabCount = 3;
@@ -3998,6 +4140,8 @@ test('trick system: dedicated Trick jump+grab flow, named grab styles, score mul
   assert.equal(sim.scoreMultiplier, 1);
   assert.equal(sim.peakMultiplier, 1);
   assert.equal(sim.multiplierTimer, 0);
+  assert.equal(sim.scoredRampIds.length, 0);
+  assert.equal(sim.scoredObstacleIds.length, 0);
 
   startNewGame(sim, 'playing');
   assert.equal(sim.score, 0);
@@ -5208,9 +5352,9 @@ test('custom MP3 SFX mapping: gameOver, road collectible pickup, and finish fanf
     const stats = fs.statSync(diskPath);
     assert.ok(stats.size > 1000, `SFX asset ${key} appears empty (${stats.size} bytes)`);
 
-    // Unmuted gain is balanced in (0.4..0.9], muted is strictly 0
+    // Unmuted gain is softened in (0.2..0.45], muted is strictly 0
     const unmutedVol = computeSfxClipVolume(key, false);
-    assert.ok(unmutedVol > 0.4 && unmutedVol <= 0.9, `Unexpected gain for ${key}: ${unmutedVol}`);
+    assert.ok(unmutedVol > 0.2 && unmutedVol <= 0.45, `Unexpected softened gain for ${key}: ${unmutedVol}`);
     assert.equal(computeSfxClipVolume(key, true), 0, `${key} SFX must silence when muted`);
     assert.ok(cfg.duckDurationMs >= 300, `${key} duck window should be >= 300ms`);
   }

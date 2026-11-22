@@ -398,6 +398,11 @@ function configureLevelInPlace(
   state.activeGrabStyle = 'INDY';
   state.airPeakHeight = 0;
   state.launchedFromRamp = false;
+  state.launchRampId = null;
+  state.clearedObstacleInAir = false;
+  state.pendingClearedObstacleIds = [];
+  state.scoredRampIds = [];
+  state.scoredObstacleIds = [];
   state.scoreMultiplier = TRICK_CONFIG.minMultiplier;
   state.peakMultiplier = TRICK_CONFIG.minMultiplier;
   state.multiplierTimer = 0;
@@ -487,6 +492,11 @@ export function createInitialSimulationState(
     activeGrabStyle: 'INDY',
     airPeakHeight: 0,
     launchedFromRamp: false,
+    launchRampId: null,
+    clearedObstacleInAir: false,
+    pendingClearedObstacleIds: [],
+    scoredRampIds: [],
+    scoredObstacleIds: [],
     scoreMultiplier: TRICK_CONFIG.minMultiplier,
     peakMultiplier: TRICK_CONFIG.minMultiplier,
     multiplierTimer: 0,
@@ -990,6 +1000,9 @@ export function stepSimulation(
     state.grabAirHoldTime = 0;
     state.airPeakHeight = state.heightAboveGround;
     state.launchedFromRamp = true;
+    state.launchRampId = crossedLipRamp.id;
+    state.clearedObstacleInAir = false;
+    state.pendingClearedObstacleIds = [];
     state.activeGrabStyle = selectGrabTrickStyle(steer, true, state.grabCount);
     events.tookOff = true;
   } else if (
@@ -1017,6 +1030,9 @@ export function stepSimulation(
     state.grabAirHoldTime = 0;
     state.airPeakHeight = state.heightAboveGround;
     state.launchedFromRamp = onRampNow;
+    state.launchRampId = onRampNow && currRampSample.ramp ? currRampSample.ramp.id : null;
+    state.clearedObstacleInAir = false;
+    state.pendingClearedObstacleIds = [];
     state.activeGrabStyle = selectGrabTrickStyle(steer, onRampNow, state.grabCount);
     events.tookOff = true;
   } else if (state.jumpState === 'AIRBORNE') {
@@ -1062,13 +1078,19 @@ export function stepSimulation(
       state.activeRampId = currRampSample.ramp ? currRampSample.ramp.id : null;
       events.landed = true;
 
-      // Award trick points & score multiplier strictly upon clean LANDING (never per-frame in mid-air!)
+      // Award trick points & score multiplier strictly upon clean LANDING off a fresh Ramp
+      // or after cleanly jumping OVER an unscored obstacle (zero points for flat-ground jump spam!)
+      const freshRampLaunch =
+        state.launchedFromRamp &&
+        (state.launchRampId === null || !state.scoredRampIds.includes(state.launchRampId));
+      const freshObstacleClear = state.clearedObstacleInAir;
       const trickResult = evaluateTrickLanding({
         grabbed: state.grabHeldInAir,
         grabHoldTime: state.grabAirHoldTime,
         minGrabHoldSeconds: SIM_CONFIG.minGrabHoldSeconds,
         peakAirHeight: state.airPeakHeight,
-        launchedFromRamp: state.launchedFromRamp,
+        launchedFromRamp: freshRampLaunch,
+        clearedObstacle: freshObstacleClear,
         grabStyle: state.activeGrabStyle,
         currentMultiplier: state.scoreMultiplier,
         currentTimer: state.multiplierTimer,
@@ -1077,6 +1099,20 @@ export function stepSimulation(
       state.scoreMultiplier = trickResult.nextMultiplier;
       state.peakMultiplier = Math.max(state.peakMultiplier, trickResult.nextMultiplier);
       state.multiplierTimer = trickResult.nextTimer;
+
+      if (trickResult.awardedTrick) {
+        if (freshRampLaunch && state.launchRampId !== null) {
+          state.scoredRampIds.push(state.launchRampId);
+        }
+        if (state.pendingClearedObstacleIds.length > 0) {
+          for (let ci = 0; ci < state.pendingClearedObstacleIds.length; ci++) {
+            const clearedId = state.pendingClearedObstacleIds[ci];
+            if (!state.scoredObstacleIds.includes(clearedId)) {
+              state.scoredObstacleIds.push(clearedId);
+            }
+          }
+        }
+      }
 
       if (trickResult.awardedGrab) {
         state.grabCount += 1;
@@ -1100,13 +1136,14 @@ export function stepSimulation(
         state.landingBoostTimer = 0.35;
         events.landedTrickPoints = trickResult.points;
         events.landedTrickLabel = trickResult.label;
-      } else {
-        state.landingBoostTimer = 0.35;
       }
       state.grabHeldInAir = false;
       state.grabAirHoldTime = 0;
       state.airPeakHeight = 0;
       state.launchedFromRamp = false;
+      state.launchRampId = null;
+      state.clearedObstacleInAir = false;
+      state.pendingClearedObstacleIds = [];
     }
   } else {
     // GROUNDED or LANDING state
@@ -1226,6 +1263,14 @@ export function stepSimulation(
       if (overlapsFootprint) {
         // Height-aware check: if airborne strictly above this obstacle's clearance height (fallen log or low rock), sail over cleanly!
         if (state.heightAboveGround > obs.clearanceHeight) {
+          if (
+            state.jumpState === 'AIRBORNE' &&
+            !state.scoredObstacleIds.includes(obs.id) &&
+            !state.pendingClearedObstacleIds.includes(obs.id)
+          ) {
+            state.pendingClearedObstacleIds.push(obs.id);
+            state.clearedObstacleInAir = true;
+          }
           continue;
         }
 
@@ -1240,9 +1285,12 @@ export function stepSimulation(
         state.hitFlashTimer = SIM_CONFIG.hitFlashDuration;
         state.slowdownTimer = SIM_CONFIG.slowdownDuration;
         state.landingBoostTimer = 0;
-        // Obstacle crash breaks active trick combo multiplier back to 1x
+        // Obstacle crash breaks active trick combo multiplier & invalidates mid-air trick credit
         state.scoreMultiplier = TRICK_CONFIG.minMultiplier;
         state.multiplierTimer = 0;
+        state.clearedObstacleInAir = false;
+        state.pendingClearedObstacleIds = [];
+        state.grabHeldInAir = false;
 
         if (obs.kind !== 'fallen_log') {
           const pushDir = dx >= 0 ? -1 : 1;
@@ -1393,6 +1441,10 @@ export function buildHudSnapshot(
     hitFeedback: state.hitFlashTimer > 0,
     jumpState: state.jumpState,
     isGrabbing: state.jumpState === 'AIRBORNE' && state.grabAmount > 0.25,
+    canScoreCurrentGrab:
+      (state.launchedFromRamp &&
+        (state.launchRampId === null || !state.scoredRampIds.includes(state.launchRampId))) ||
+      state.clearedObstacleInAir,
     grabCount: outcome ? outcome.grabCount : state.grabCount,
     trickFeedbackActive: state.trickFeedbackTimer > 0,
     followerCount: activeFollowerCount,

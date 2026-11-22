@@ -238,18 +238,22 @@ export function createGameAudio(rig: GameAudioSceneRig): GameAudio {
     }
 
     const audio = ensureSpatialGraph();
-    const dest = getOneShotDestination();
+    const clipDest = sfxLimiter ?? getOneShotDestination();
     const decoded = sfxBuffers[key];
 
-    // Primary zero-latency Web Audio path (supports crisp overlapping pickups & compressor limiting)
-    if (audio && dest && decoded) {
+    // Primary zero-latency Web Audio path (matches computeSfxClipVolume consistently after spatialMasterGain)
+    if (audio && clipDest && decoded) {
       try {
         const src = audio.createBufferSource();
         src.buffer = decoded;
         const gain = audio.createGain();
-        gain.gain.setValueAtTime(volume, audio.currentTime);
+        const compensatedGain = Math.min(
+          1,
+          volume / Math.max(0.1, SFX_MIX_CONFIG.spatialMasterGain),
+        );
+        gain.gain.setValueAtTime(compensatedGain, audio.currentTime);
         src.connect(gain);
-        gain.connect(dest);
+        gain.connect(clipDest);
 
         activeSfxSources.add(src);
         if (isOutcome) activeOutcomeSources.add(src);

@@ -794,7 +794,7 @@ export function GameHUD({
               {UI_COPY.hud.mobileBrake}
             </button>
 
-            {hud.isGrabbing && (
+            {hud.isGrabbing && hud.canScoreCurrentGrab && (
               <div className="fixed bottom-24 sm:bottom-20 inset-x-0 flex justify-center pointer-events-none z-10">
                 <div
                   className="rounded-xl px-3.5 py-1.5 border border-[#FFD15C]/90 bg-[#0e1a36]/82 shadow-[0_8px_22px_rgba(8,14,32,0.38)] inline-flex items-center gap-2 whitespace-nowrap"

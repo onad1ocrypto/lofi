@@ -49,23 +49,23 @@ export const SFX_CLIP_CONFIG: Readonly<Record<SfxClipKey, SfxClipConfig>> = {
   gameOver: {
     key: 'gameOver',
     src: SFX_TRACK_SRCS.gameOver,
-    volume: 0.72,
-    duckPeak: 1.0,
-    duckDurationMs: 1400,
+    volume: 0.34,
+    duckPeak: 0.75,
+    duckDurationMs: 1200,
   },
   collectible: {
     key: 'collectible',
     src: SFX_TRACK_SRCS.collectible,
-    volume: 0.62,
-    duckPeak: 0.45,
-    duckDurationMs: 420,
+    volume: 0.28,
+    duckPeak: 0.25,
+    duckDurationMs: 360,
   },
   finish: {
     key: 'finish',
     src: SFX_TRACK_SRCS.finish,
-    volume: 0.78,
-    duckPeak: 0.85,
-    duckDurationMs: 1800,
+    volume: 0.38,
+    duckPeak: 0.65,
+    duckDurationMs: 1500,
   },
 } as const;
 
@@ -86,8 +86,8 @@ export interface BgmPlaylistState {
 /**
  * Re-audited audio mix configuration:
  * Keeps the continuous soundtrack clear, warm, and present while moderating
- * spatial snow/wind loops and one-shot SFX so sound effects feel crisp and tactile
- * without overpowering or pumping the background music.
+ * spatial snow/wind loops and one-shot SFX so sound effects feel soft, crisp,
+ * and pleasant without overpowering or pumping the background music.
  */
 export const BGM_VOLUME_CONFIG = {
   /** Clear, balanced gameplay music bed that stays present alongside snow & action SFX */
@@ -100,16 +100,16 @@ export const BGM_VOLUME_CONFIG = {
   victory: 0.16,
   /** Silent on title screen & Game Over */
   silent: 0,
-  /** Subtle, musical sidechain dip (max 24%) on prominent SFX so BGM stays clear without pumping */
-  maxSfxDuckReduction: 0.24,
+  /** Gentle, musical sidechain dip (max 18%) on prominent SFX so BGM stays smooth without pumping */
+  maxSfxDuckReduction: 0.18,
 } as const;
 
-/** Moderated SFX gain multipliers preventing spatial & one-shot SFX from overwhelming BGM. */
+/** Softened SFX gain multipliers keeping spatial loops & one-shots gentle below the music bed. */
 export const SFX_MIX_CONFIG = {
-  /** Balanced spatial AudioListener master gain for snow crunch, wind, avalanche, and one-shots */
-  spatialMasterGain: 0.85,
-  /** Unity one-shot SFX bus gain into a soft DynamicsCompressor safety limiter (crisp, zero harshness) */
-  oneShotBusGain: 1.0,
+  /** Softened spatial AudioListener master gain for snow crunch, wind, avalanche, and one-shots */
+  spatialMasterGain: 0.46,
+  /** Reduced one-shot SFX bus gain into a soft DynamicsCompressor safety limiter */
+  oneShotBusGain: 0.55,
 } as const;
 
 /** Normalize a playlist index cleanly within BGM_PLAYLIST bounds. */

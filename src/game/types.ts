@@ -363,8 +363,18 @@ export interface SimulationState {
   activeGrabStyle: GrabTrickStyle;
   /** Highest altitude above ground reached during the current jump arc (meters). */
   airPeakHeight: number;
-  /** True when the current jump launched off a ramp lip. */
+  /** True when the current jump launched off a ramp lip (or ramp deck). */
   launchedFromRamp: boolean;
+  /** ID of the ramp that launched the current jump (null for flat-ground jumps). */
+  launchRampId: number | null;
+  /** True when Lofi cleanly jumped over at least one unscored obstacle during the current jump. */
+  clearedObstacleInAir: boolean;
+  /** Obstacle IDs cleanly cleared during the current airborne arc (committed on clean landing). */
+  pendingClearedObstacleIds: number[];
+  /** Ramp IDs that have already awarded jump/trick points in this level run (prevents repeat farming). */
+  scoredRampIds: number[];
+  /** Obstacle IDs that have already awarded jump-clear points in this level run (prevents repeat farming). */
+  scoredObstacleIds: number[];
   /** Active score multiplier earned from stylish descent tricks (1..5). */
   scoreMultiplier: number;
   /** Highest score multiplier reached during this run (1..5). */
@@ -500,6 +510,8 @@ export interface HudSnapshot {
   jumpState: JumpState;
   /** True while player is actively holding Grab in mid-air. */
   isGrabbing: boolean;
+  /** True when the current jump is eligible for trick score (ramp launch or cleared obstacle). */
+  canScoreCurrentGrab: boolean;
   /** Total Grab tricks cleanly landed in this level attempt. */
   grabCount: number;
   /** True briefly right after landing a Grab trick cleanly. */
