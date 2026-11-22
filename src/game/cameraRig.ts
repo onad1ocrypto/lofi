@@ -172,7 +172,7 @@ export function createCameraRig(camera: THREE.PerspectiveCamera): CameraRig {
         !initialized || immediate,
         {
           cameraMode: activeCameraMode,
-          carvingPass: levelProfile.carvingPass,
+          carvingPass: activeCameraMode === 'carving' ? levelProfile.carvingPass : undefined,
           playerDistance,
           playerJumpHeight,
           activeZone,

@@ -430,18 +430,18 @@ export function GameHUD({
                 className="flex-1 min-w-0 sm:flex-none sm:w-[216px] flex flex-col justify-between gap-1 rounded-xl sm:rounded-2xl px-2.5 py-1.5 sm:px-3.5 sm:py-2 border border-white/25 bg-[#0e1a36]/36 backdrop-blur-md shadow-[0_6px_20px_rgba(8,14,32,0.18)]"
                 aria-label={UI_COPY.hud.shelterAria}
               >
-                <div className="flex items-center justify-between gap-1.5">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <ShelterIcon className="w-4 h-4 sm:w-[18px] sm:h-[18px] shrink-0" />
+                <div className="flex items-center justify-between gap-1 sm:gap-1.5">
+                  <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+                    <ShelterIcon className="w-3.5 h-3.5 sm:w-[18px] sm:h-[18px] shrink-0" />
                     <span
-                      className="text-[9.5px] sm:text-[11px] font-extrabold uppercase tracking-wide sm:tracking-wider text-[#F0F6FF] drop-shadow-[0_1px_2px_rgba(8,14,32,0.75)] whitespace-nowrap"
+                      className="text-[8.5px] sm:text-[11px] font-extrabold uppercase tracking-tight sm:tracking-wider text-[#F0F6FF] drop-shadow-[0_1px_2px_rgba(8,14,32,0.75)] whitespace-nowrap truncate"
                       data-testid="hud-level"
                     >
                       LV {hud.levelNumber} · {UI_COPY.hud.shelter}
                     </span>
                   </div>
                   <span
-                    className="font-display text-sm sm:text-base font-bold text-white drop-shadow-[0_1px_2px_rgba(8,14,32,0.75)] leading-none tabular-nums shrink-0"
+                    className="font-display text-xs sm:text-base font-bold text-white drop-shadow-[0_1px_2px_rgba(8,14,32,0.75)] leading-none tabular-nums shrink-0"
                     data-testid="hud-progress"
                   >
                     {hud.progressPct}%

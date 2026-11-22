@@ -822,8 +822,11 @@ export function stepSimulation(
     );
   } else if (state.forwardSpeed < effectiveCruiseSpeed) {
     const recoveryMult =
-      (state.slowdownTimer > 0 ? 0.45 : 1.0) *
-      (flatSample.active ? 1 - 0.35 * flatSample.factor : 1.0);
+      state.slowdownTimer > 0
+        ? 0.45
+        : flatSample.active
+          ? 1 - 0.35 * flatSample.factor
+          : 1.0;
     state.forwardSpeed = Math.min(
       effectiveCruiseSpeed,
       state.forwardSpeed + SIM_CONFIG.speedRecoveryRate * recoveryMult * dt,

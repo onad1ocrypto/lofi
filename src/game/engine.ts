@@ -240,7 +240,7 @@ export function createGameEngine(
     sim.travelDistance = startZ;
     sim.lateralOffset = startLat;
     sim.pathHistory = [];
-    for (let d = startZ - 26; d <= startZ; d += 0.4) {
+    for (let d = startZ - 36; d <= startZ; d += 0.4) {
       const wx = getTrackCenterX(d) + startLat;
       sim.pathHistory.push({
         travelDistance: d,
