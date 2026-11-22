@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { GameHUD } from './components/GameHUD';
+import { ProfileModal, WalletConnectModal } from './components/WalletModals';
 import { createGameEngine, type GameEngineController } from './game/engine';
 import { createHeroInspector } from './game/heroInspector';
 import { LEVEL_CONFIGS } from './game/levels';
@@ -7,6 +8,22 @@ import {
   buildHudSnapshot,
   createInitialSimulationState,
 } from './game/simulation';
+import {
+  applyLevelCompletionToProfile,
+  createEmptySuiProfile,
+  type SuiPlayerProfile,
+} from './game/suiProfileLogic';
+import {
+  connectSuiWallet,
+  disconnectSuiWallet,
+  loadWalletSuiProfile,
+  refreshDetectedSuiWallets,
+  saveWalletSuiProfile,
+  subscribeDetectedSuiWallets,
+  subscribeWalletAccountChanges,
+  type ConnectedSuiWalletSession,
+  type DetectedSuiWallet,
+} from './game/suiWalletService';
 import type { HudSnapshot } from './game/types';
 import { UI_COPY } from './game/uiCopy';
 
@@ -86,6 +103,127 @@ export default function App() {
     );
   });
   const [muted, setMuted] = useState(false);
+
+  // ==================== SUI WALLET & PROFILE STATE (OPTIONAL LAYER OVER DEMO MODE) ====================
+  const [detectedWallets, setDetectedWallets] = useState<DetectedSuiWallet[]>([]);
+  const [walletSession, setWalletSession] = useState<ConnectedSuiWalletSession | null>(null);
+  const [walletProfile, setWalletProfile] = useState<SuiPlayerProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [connectModalOpen, setConnectModalOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [walletConnecting, setWalletConnecting] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const savedVictoryKeyRef = useRef<string | null>(null);
+
+  // Discover standard Sui browser wallets without interfering with gameplay or Demo Mode
+  useEffect(() => {
+    return subscribeDetectedSuiWallets((wallets) => {
+      setDetectedWallets(wallets);
+    });
+  }, []);
+
+  // Load compact Sui profile whenever a wallet logs in or switches account
+  const loadProfileForAddress = useCallback(async (address: string) => {
+    setProfileLoading(true);
+    setWalletProfile(createEmptySuiProfile(address));
+    try {
+      const loaded = await loadWalletSuiProfile(address);
+      setWalletProfile(loaded);
+    } finally {
+      setProfileLoading(false);
+    }
+  }, []);
+
+  const handleDisconnectWallet = useCallback(() => {
+    const active = walletSession;
+    setWalletSession(null);
+    setWalletProfile(null);
+    setProfileModalOpen(false);
+    setWalletError(null);
+    savedVictoryKeyRef.current = null;
+    // Disconnect wallet cleanly without deleting local game data or saved wallet profiles
+    void disconnectSuiWallet(active);
+  }, [walletSession]);
+
+  // Listen for wallet-initiated account changes or disconnects
+  useEffect(() => {
+    if (!walletSession) return;
+    return subscribeWalletAccountChanges(walletSession, {
+      onAccountChanged: (nextAddress) => {
+        setWalletSession((prev) => (prev ? { ...prev, address: nextAddress } : null));
+        savedVictoryKeyRef.current = null;
+        void loadProfileForAddress(nextAddress);
+      },
+      onDisconnected: () => {
+        setWalletSession(null);
+        setWalletProfile(null);
+        setProfileModalOpen(false);
+        savedVictoryKeyRef.current = null;
+      },
+    });
+  }, [walletSession, loadProfileForAddress]);
+
+  const handleSelectWallet = useCallback(
+    async (wallet: DetectedSuiWallet) => {
+      setWalletConnecting(true);
+      setWalletError(null);
+      try {
+        const session = await connectSuiWallet(wallet);
+        setWalletSession(session);
+        setConnectModalOpen(false);
+        setProfileModalOpen(true);
+        savedVictoryKeyRef.current = null;
+        await loadProfileForAddress(session.address);
+      } catch (err) {
+        const msg =
+          err instanceof Error && err.message.trim().length > 0
+            ? err.message
+            : UI_COPY.wallet.connectFailedFallback;
+        setWalletError(msg);
+      } finally {
+        setWalletConnecting(false);
+      }
+    },
+    [loadProfileForAddress],
+  );
+
+  // Persist compact progress ONLY when a Sui wallet is connected (never in Demo Mode)
+  useEffect(() => {
+    if (!walletSession) {
+      savedVictoryKeyRef.current = null;
+      return;
+    }
+    if (hud.phase !== 'victory') {
+      savedVictoryKeyRef.current = null;
+      return;
+    }
+    const victoryKey = `${walletSession.address}:lv${hud.levelNumber}`;
+    if (savedVictoryKeyRef.current === victoryKey) return;
+    savedVictoryKeyRef.current = victoryKey;
+
+    setWalletProfile((prev) => {
+      const base =
+        prev && prev.walletAddress === walletSession.address
+          ? prev
+          : createEmptySuiProfile(walletSession.address);
+      const updated = applyLevelCompletionToProfile(base, hud.levelNumber);
+      saveWalletSuiProfile(walletSession.address, updated);
+      return updated;
+    });
+  }, [walletSession, hud.phase, hud.levelNumber]);
+
+  // Close wallet/profile overlays if gameplay starts
+  useEffect(() => {
+    if (hud.phase === 'playing') {
+      setConnectModalOpen(false);
+      setProfileModalOpen(false);
+    }
+  }, [hud.phase]);
+
+  // Expose wallet mode cleanly for automated browser testing (never exposes private keys)
+  useEffect(() => {
+    document.body.dataset.walletMode = walletSession ? 'connected' : 'demo';
+  }, [walletSession]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -168,6 +306,17 @@ export default function App() {
       <GameHUD
         hud={hud}
         muted={muted}
+        walletSession={walletSession}
+        onOpenConnectWallet={() => {
+          setWalletError(null);
+          setDetectedWallets(refreshDetectedSuiWallets());
+          setConnectModalOpen(true);
+        }}
+        onOpenProfile={() => {
+          if (!walletSession) return;
+          setProfileModalOpen(true);
+        }}
+        onDisconnectWallet={handleDisconnectWallet}
         onStart={() => engineRef.current?.startGame()}
         onPause={() => engineRef.current?.pauseGame()}
         onResume={() => engineRef.current?.resumeGame()}
@@ -183,6 +332,31 @@ export default function App() {
           engineRef.current?.toggleMute();
         }}
       />
+
+      {connectModalOpen && !walletSession && (
+        <WalletConnectModal
+          wallets={detectedWallets}
+          connecting={walletConnecting}
+          errorMessage={walletError}
+          onSelectWallet={handleSelectWallet}
+          onRefreshWallets={() => {
+            setDetectedWallets(refreshDetectedSuiWallets());
+          }}
+          onClose={() => {
+            if (!walletConnecting) setConnectModalOpen(false);
+          }}
+        />
+      )}
+
+      {profileModalOpen && walletSession && (
+        <ProfileModal
+          session={walletSession}
+          profile={walletProfile ?? createEmptySuiProfile(walletSession.address)}
+          loading={profileLoading}
+          onDisconnect={handleDisconnectWallet}
+          onClose={() => setProfileModalOpen(false)}
+        />
+      )}
     </main>
   );
 }

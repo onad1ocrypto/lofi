@@ -123,6 +123,24 @@ import {
   triggerGameOverSequenceOnce,
   triggerShelterCelebrationOnce,
 } from './shelterArrival';
+import {
+  MAX_PROFILE_PAYLOAD_BYTES,
+  SUI_BADGE_DEFINITIONS,
+  applyLevelCompletionToProfile,
+  buildSuiProfileStorageKey,
+  computeRecruitedLilYetis,
+  createEmptySuiProfile,
+  deriveBadgesForProgress,
+  isAllowedSuiRpcUrl,
+  isValidSuiAddress,
+  mergeSuiProfiles,
+  normalizeSuiAddress,
+  parseSuiProfilePayload,
+  sanitizeWalletIconUrl,
+  serializeSuiProfilePayload,
+  shortenSuiAddress,
+} from './suiProfileLogic';
+import { saveWalletSuiProfile } from './suiWalletService';
 import { SHELTER_ARCHITECTURE } from './shelterBuilder';
 import { DAYLIGHT_RIG, FOG_CONFIG, SKY_PALETTE } from './skyDome';
 import {
@@ -6608,6 +6626,119 @@ test('Level 10 — Summit Run: 9 Lil Yetis, 6-section layout (carving -> recover
   assert.equal(fromLv9.steepPhase, 'NORMAL');
   assert.equal(fromLv9.brakeAmount, 0);
 });
+
+test('Sui wallet login & profile logic: Demo Mode isolation, address normalization/shortening, compact Sui payload, badges, monotonic merge, and URL/icon security', () => {
+  const walletA = '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234569f0e';
+  const walletB = '0xdeadbeef0000000000000000000000000000000000000000000000000000cafe';
+  const shortHex = '0xabc';
+
+  // 1. Strict Sui address validation, canonical normalization, and shortening
+  assert.equal(isValidSuiAddress(walletA), true);
+  assert.equal(isValidSuiAddress(shortHex), true);
+  assert.equal(isValidSuiAddress('not-a-sui-address'), false);
+  assert.equal(isValidSuiAddress('0xGGGG'), false);
+  assert.equal(normalizeSuiAddress(shortHex), `0x${'0'.repeat(61)}abc`);
+  assert.equal(shortenSuiAddress(walletA), '0x1a2b…9f0e');
+  assert.equal(normalizeSuiAddress('invalid'), null);
+
+  // 2. Demo Mode isolation: refuses to write any Sui profile without a connected wallet
+  const emptyA = createEmptySuiProfile(walletA, '2026-11-22T12:00:00.000Z');
+  assert.equal(emptyA.highestCompletedLevel, 0);
+  assert.equal(emptyA.lilYetisRecruited, 0);
+  assert.deepEqual(emptyA.badges, []);
+  assert.equal(saveWalletSuiProfile(null, emptyA), false, 'Demo Mode must NEVER save progress to Sui');
+  assert.equal(
+    saveWalletSuiProfile(walletB, emptyA),
+    false,
+    'Cross-wallet profile writes must be rejected',
+  );
+
+  // 3. Monotonic level completion, Lil Yetis recruitment cap (9), and deterministic badges
+  let prof = applyLevelCompletionToProfile(emptyA, 1, '2026-11-22T12:01:00.000Z');
+  assert.equal(prof.highestCompletedLevel, 1);
+  assert.equal(prof.lilYetisRecruited, 1);
+  assert.deepEqual(prof.badges, ['first_shelter']);
+
+  prof = applyLevelCompletionToProfile(prof, 5, '2026-11-22T12:05:00.000Z');
+  assert.equal(prof.highestCompletedLevel, 5);
+  assert.equal(prof.lilYetisRecruited, 5);
+  assert.deepEqual(prof.badges, ['first_shelter', 'steep_survivor', 'alpine_carver']);
+
+  // Completing an earlier level (e.g. Level 2 replay) must NEVER regress highest level or badges
+  const afterReplay = applyLevelCompletionToProfile(prof, 2, '2026-11-22T12:06:00.000Z');
+  assert.equal(afterReplay.highestCompletedLevel, 5);
+  assert.equal(afterReplay.lilYetisRecruited, 5);
+  assert.deepEqual(afterReplay.badges, ['first_shelter', 'steep_survivor', 'alpine_carver']);
+
+  // Completing Level 10 caps Lil Yetis strictly at 9 and unlocks all 5 badges
+  const summitProf = applyLevelCompletionToProfile(afterReplay, 10, '2026-11-22T12:10:00.000Z');
+  assert.equal(summitProf.highestCompletedLevel, 10);
+  assert.equal(summitProf.lilYetisRecruited, 9);
+  assert.equal(computeRecruitedLilYetis(10), 9);
+  assert.equal(summitProf.badges.length, SUI_BADGE_DEFINITIONS.length);
+  assert.deepEqual(
+    summitProf.badges,
+    ['first_shelter', 'steep_survivor', 'alpine_carver', 'yeti_squad', 'summit_champion'],
+  );
+
+  // 4. Compact Sui payload serialization: strictly tiny metadata only (no audio, images, or secrets)
+  const serialized = serializeSuiProfilePayload(summitProf);
+  assert.ok(
+    serialized.length < 320 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
+    `Serialized Sui profile must remain tiny (got ${serialized.length} bytes)`,
+  );
+  assert.equal(serialized.includes('privateKey'), false);
+  assert.equal(serialized.includes('.mp3'), false);
+  assert.equal(serialized.includes('.png'), false);
+
+  const reloaded = parseSuiProfilePayload(walletA, serialized);
+  assert.ok(reloaded, 'Valid serialized Sui profile must parse cleanly');
+  assert.equal(reloaded.walletAddress, walletA);
+  assert.equal(reloaded.highestCompletedLevel, 10);
+  assert.equal(reloaded.lilYetisRecruited, 9);
+  assert.deepEqual(reloaded.badges, summitProf.badges);
+
+  // Malformed or oversized payloads are rejected; unknown badges are stripped
+  assert.equal(parseSuiProfilePayload(walletA, '{bad-json'), null);
+  assert.equal(parseSuiProfilePayload(walletA, 'x'.repeat(MAX_PROFILE_PAYLOAD_BYTES + 10)), null);
+  const tampered = parseSuiProfilePayload(
+    walletA,
+    JSON.stringify({
+      v: 1,
+      highestCompletedLevel: 3,
+      lilYetisRecruited: 99,
+      badges: ['first_shelter', 'injected_fake_badge'],
+      updatedAt: '2026-11-22T12:12:00.000Z',
+    }),
+  );
+  assert.ok(tampered);
+  assert.equal(tampered.highestCompletedLevel, 3);
+  assert.equal(tampered.lilYetisRecruited, 9, 'Lil Yetis count must be clamped <= 9');
+  assert.equal(tampered.badges.includes('injected_fake_badge' as never), false);
+  assert.deepEqual(deriveBadgesForProgress(3, 3), ['first_shelter', 'steep_survivor']);
+
+  // 5. Monotonic merge preserves highest progress across devices/reloads & isolates wallets
+  const merged = mergeSuiProfiles(prof, summitProf);
+  assert.equal(merged.highestCompletedLevel, 10);
+  assert.equal(merged.lilYetisRecruited, 9);
+  assert.notEqual(buildSuiProfileStorageKey(walletA), buildSuiProfileStorageKey(walletB));
+  assert.throws(() => mergeSuiProfiles(prof, createEmptySuiProfile(walletB)));
+
+  // 6. Security checks on Sui RPC URLs & wallet icon URLs
+  assert.equal(isAllowedSuiRpcUrl('https://fullnode.testnet.sui.io:443'), true);
+  assert.equal(isAllowedSuiRpcUrl('https://fullnode.mainnet.sui.io'), true);
+  assert.equal(isAllowedSuiRpcUrl('http://fullnode.testnet.sui.io'), false);
+  assert.equal(isAllowedSuiRpcUrl('http://127.0.0.1:9000'), false);
+  assert.equal(isAllowedSuiRpcUrl('https://169.254.169.254/latest'), false);
+  assert.equal(isAllowedSuiRpcUrl('https://evil.example.com'), false);
+  assert.equal(sanitizeWalletIconUrl('javascript:alert(1)'), null);
+  assert.equal(sanitizeWalletIconUrl('https://wallet.sui.io/icon.png'), 'https://wallet.sui.io/icon.png');
+  assert.equal(
+    sanitizeWalletIconUrl('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4='),
+    'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+  );
+});
+
 
 
 
