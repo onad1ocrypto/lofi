@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    touch-action: none;
+    overscroll-behavior: none;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-display {
+  font-family: 'Fredoka', 'Plus Jakarta Sans', system-ui, sans-serif;
+}
+
+.hud-text-stroke {
+  paint-order: stroke fill;
+  -webkit-text-stroke: 3px rgba(19, 27, 48, 0.82);
+  text-shadow: 0 2px 6px rgba(15, 21, 40, 0.45);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes outcome-backdrop-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes outcome-victory-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes outcome-victory-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+@keyframes outcome-defeat-settle {
+  0% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes intro-play-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.outcome-backdrop-fade {
+  animation: outcome-backdrop-fade 280ms ease-out both;
+}
+
+.outcome-victory-float {
+  animation:
+    outcome-victory-enter 360ms ease-out both,
+    outcome-victory-bob 2.6s ease-in-out 360ms infinite;
+}
+
+.outcome-defeat-settle {
+  animation: outcome-defeat-settle 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.intro-play-reveal {
+  animation: intro-play-reveal 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .outcome-backdrop-fade,
+  .outcome-victory-float,
+  .outcome-defeat-settle,
+  .intro-play-reveal {
+    animation: outcome-backdrop-fade 160ms ease-out both;
+  }
+}
+

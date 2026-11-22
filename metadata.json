@@ -1,0 +1,8 @@
+{
+  "name": "LOFI ICE ESCAPE",
+  "description": "Prototipe game snowboard 3D menuruni gunung salju bersama Lofi, menghindari batu dan pohon pinus sambil melarikan diri dari longsor menuju shelter hangat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
