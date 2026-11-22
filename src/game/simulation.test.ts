@@ -124,13 +124,17 @@ import {
   triggerShelterCelebrationOnce,
 } from './shelterArrival';
 import {
+  DAILY_STREAK_FIRE_THRESHOLD,
   MAX_PROFILE_PAYLOAD_BYTES,
   SUI_BADGE_DEFINITIONS,
+  applyDailyLoginToProfile,
   applyLevelCompletionToProfile,
   buildSuiProfileStorageKey,
+  computeCalendarDayDelta,
   computeRecruitedLilYetis,
   createEmptySuiProfile,
   deriveBadgesForProgress,
+  hasStreakFireBadge,
   isAllowedSuiRpcUrl,
   isValidSuiAddress,
   mergeSuiProfiles,
@@ -139,6 +143,7 @@ import {
   sanitizeWalletIconUrl,
   serializeSuiProfilePayload,
   shortenSuiAddress,
+  toCalendarDateKey,
 } from './suiProfileLogic';
 import { saveWalletSuiProfile } from './suiWalletService';
 import { SHELTER_ARCHITECTURE } from './shelterBuilder';
@@ -6670,12 +6675,12 @@ test('Sui wallet login & profile logic: Demo Mode isolation, address normalizati
   assert.equal(afterReplay.lilYetisRecruited, 5);
   assert.deepEqual(afterReplay.badges, ['first_shelter', 'steep_survivor', 'alpine_carver']);
 
-  // Completing Level 10 caps Lil Yetis strictly at 9 and unlocks all 5 badges
+  // Completing Level 10 caps Lil Yetis strictly at 9 and unlocks all 5 level progression badges
   const summitProf = applyLevelCompletionToProfile(afterReplay, 10, '2026-11-22T12:10:00.000Z');
   assert.equal(summitProf.highestCompletedLevel, 10);
   assert.equal(summitProf.lilYetisRecruited, 9);
   assert.equal(computeRecruitedLilYetis(10), 9);
-  assert.equal(summitProf.badges.length, SUI_BADGE_DEFINITIONS.length);
+  assert.equal(SUI_BADGE_DEFINITIONS.length, 6);
   assert.deepEqual(
     summitProf.badges,
     ['first_shelter', 'steep_survivor', 'alpine_carver', 'yeti_squad', 'summit_champion'],
@@ -6684,7 +6689,7 @@ test('Sui wallet login & profile logic: Demo Mode isolation, address normalizati
   // 4. Compact Sui payload serialization: strictly tiny metadata only (no audio, images, or secrets)
   const serialized = serializeSuiProfilePayload(summitProf);
   assert.ok(
-    serialized.length < 320 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
+    serialized.length < 350 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
     `Serialized Sui profile must remain tiny (got ${serialized.length} bytes)`,
   );
   assert.equal(serialized.includes('privateKey'), false);
@@ -6737,6 +6742,92 @@ test('Sui wallet login & profile logic: Demo Mode isolation, address normalizati
     sanitizeWalletIconUrl('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4='),
     'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
   );
+});
+
+test('Sui daily login streak counter and Streak Fire badge: consecutive days, same-day idempotence, missed-day reset, serialization, and merge', () => {
+  const wallet = '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234569f0e';
+  assert.equal(DAILY_STREAK_FIRE_THRESHOLD, 2);
+
+  // Calendar date key validation & day delta calculation
+  assert.equal(toCalendarDateKey('2026-11-22'), '2026-11-22');
+  assert.equal(toCalendarDateKey('2026-02-31'), null, 'Impossible calendar date must be rejected');
+  assert.equal(toCalendarDateKey('not-a-date'), null);
+  assert.equal(computeCalendarDayDelta('2026-11-21', '2026-11-22'), 1);
+  assert.equal(computeCalendarDayDelta('2026-11-30', '2026-12-01'), 1);
+  assert.equal(computeCalendarDayDelta('2026-11-22', '2026-11-22'), 0);
+  assert.equal(computeCalendarDayDelta('2026-11-20', '2026-11-22'), 2);
+
+  // 1. First login starts streak at 1 without activating Streak Fire yet
+  const empty = createEmptySuiProfile(wallet, '2026-11-20T09:00:00.000Z');
+  assert.equal(empty.loginStreak, 0);
+  assert.equal(empty.lastLoginDate, null);
+  assert.equal(hasStreakFireBadge(empty), false);
+
+  const day1 = applyDailyLoginToProfile(empty, '2026-11-20', '2026-11-20T09:00:00.000Z');
+  assert.equal(day1.loginStreak, 1);
+  assert.equal(day1.lastLoginDate, '2026-11-20');
+  assert.equal(hasStreakFireBadge(day1), false);
+  assert.equal(day1.badges.includes('streak_fire'), false);
+
+  // 2. Repeated login on the same calendar day is idempotent
+  const day1Again = applyDailyLoginToProfile(day1, '2026-11-20', '2026-11-20T21:30:00.000Z');
+  assert.equal(day1Again.loginStreak, 1);
+  assert.equal(day1Again.lastLoginDate, '2026-11-20');
+  assert.equal(hasStreakFireBadge(day1Again), false);
+
+  // 3. Consecutive daily login increments streak and activates Streak Fire badge
+  const day2 = applyDailyLoginToProfile(day1Again, '2026-11-21', '2026-11-21T08:00:00.000Z');
+  assert.equal(day2.loginStreak, 2);
+  assert.equal(day2.lastLoginDate, '2026-11-21');
+  assert.equal(hasStreakFireBadge(day2), true);
+  assert.equal(day2.badges.includes('streak_fire'), true);
+
+  const day3 = applyDailyLoginToProfile(day2, '2026-11-22', '2026-11-22T10:15:00.000Z');
+  assert.equal(day3.loginStreak, 3);
+  assert.equal(day3.lastLoginDate, '2026-11-22');
+  assert.equal(hasStreakFireBadge(day3), true);
+  assert.equal(day3.badges.includes('streak_fire'), true);
+
+  // Completing levels while on a streak preserves streak & Streak Fire badge
+  const day3WithWin = applyLevelCompletionToProfile(day3, 1, '2026-11-22T10:20:00.000Z');
+  assert.equal(day3WithWin.loginStreak, 3);
+  assert.deepEqual(day3WithWin.badges, ['first_shelter', 'streak_fire']);
+
+  // 4. Compact Sui payload round-trips loginStreak, lastLoginDate, and streak_fire badge
+  const serialized = serializeSuiProfilePayload(day3WithWin);
+  assert.ok(
+    serialized.length < 350 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
+    `Serialized streak profile must stay compact (got ${serialized.length} bytes)`,
+  );
+  const parsed = parseSuiProfilePayload(wallet, serialized);
+  assert.ok(parsed);
+  assert.equal(parsed.loginStreak, 3);
+  assert.equal(parsed.lastLoginDate, '2026-11-22');
+  assert.equal(hasStreakFireBadge(parsed), true);
+  assert.deepEqual(parsed.badges, ['first_shelter', 'streak_fire']);
+
+  // 5. Clock skew behind stored date does not reset or double-increment streak
+  const clockSkew = applyDailyLoginToProfile(day3WithWin, '2026-11-21', '2026-11-21T23:00:00.000Z');
+  assert.equal(clockSkew.loginStreak, 3);
+  assert.equal(clockSkew.lastLoginDate, '2026-11-22');
+  assert.equal(hasStreakFireBadge(clockSkew), true);
+
+  // 6. Missing a full day (gap >= 2 days) resets streak to 1 and deactivates Streak Fire
+  const afterGap = applyDailyLoginToProfile(day3WithWin, '2026-11-24', '2026-11-24T09:00:00.000Z');
+  assert.equal(afterGap.loginStreak, 1);
+  assert.equal(afterGap.lastLoginDate, '2026-11-24');
+  assert.equal(hasStreakFireBadge(afterGap), false);
+  assert.equal(afterGap.badges.includes('streak_fire'), false);
+  assert.equal(afterGap.badges.includes('first_shelter'), true, 'Level badges remain earned after streak reset');
+
+  // 7. Merging two profile snapshots keeps the newer calendar date's streak
+  const merged = mergeSuiProfiles(day2, day3WithWin);
+  assert.equal(merged.loginStreak, 3);
+  assert.equal(merged.lastLoginDate, '2026-11-22');
+  assert.equal(hasStreakFireBadge(merged), true);
+
+  // 8. Demo Mode still refuses to save streak data
+  assert.equal(saveWalletSuiProfile(null, day3WithWin), false);
 });
 
 

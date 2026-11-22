@@ -12,7 +12,9 @@
  */
 
 import {
+  applyDailyLoginToProfile,
   buildSuiProfileStorageKey,
+  clampLoginStreak,
   createEmptySuiProfile,
   deriveBadgesForProgress,
   isAllowedSuiRpcUrl,
@@ -21,6 +23,7 @@ import {
   parseSuiProfilePayload,
   sanitizeWalletIconUrl,
   serializeSuiProfilePayload,
+  toCalendarDateKey,
   type SuiBadgeId,
   type SuiPlayerProfile,
 } from './suiProfileLogic';
@@ -365,6 +368,11 @@ async function fetchOnChainSuiProfile(
 
     const highestCompletedLevel = Number(fields.highest_completed_level ?? 0);
     const lilYetisRecruited = Number(fields.lil_yetis_recruited ?? 0);
+    const loginStreak = clampLoginStreak(Number(fields.login_streak ?? 0));
+    const lastLoginDate =
+      typeof fields.last_login_date === 'string'
+        ? toCalendarDateKey(fields.last_login_date)
+        : null;
     const rawBadges = Array.isArray(fields.badges)
       ? fields.badges.filter((x): x is SuiBadgeId => typeof x === 'string')
       : [];
@@ -377,10 +385,13 @@ async function fetchOnChainSuiProfile(
       lilYetisRecruited: Number.isFinite(lilYetisRecruited)
         ? Math.max(0, Math.min(9, Math.floor(lilYetisRecruited)))
         : 0,
+      loginStreak,
+      lastLoginDate,
       badges: deriveBadgesForProgress(
         highestCompletedLevel,
         lilYetisRecruited,
         rawBadges,
+        loginStreak,
       ),
       updatedAt: new Date().toISOString(),
       syncSource: 'sui-rpc',
@@ -395,12 +406,13 @@ async function fetchOnChainSuiProfile(
 }
 
 /**
- * Loads the compact Sui profile for a connected wallet address.
- * Combines wallet-scoped storage with on-chain Sui RPC state (if configured)
- * using monotonic merge so earned progress is preserved across logins.
+ * Loads the compact Sui profile for a connected wallet address, records the
+ * daily login streak (when `recordDailyLogin` is true), and persists the updated
+ * compact profile strictly for that connected wallet.
  */
 export async function loadWalletSuiProfile(
   walletAddress: string,
+  options: { recordDailyLogin?: boolean; now?: Date | string } = {},
 ): Promise<SuiPlayerProfile> {
   const normalized = normalizeSuiAddress(walletAddress);
   if (!normalized) {
@@ -420,19 +432,27 @@ export async function loadWalletSuiProfile(
 
   const onChain = await fetchOnChainSuiProfile(normalized);
 
+  let base: SuiPlayerProfile;
   if (stored && onChain) {
-    const merged = mergeSuiProfiles(onChain, stored);
-    saveWalletSuiProfile(normalized, merged);
-    return merged;
+    base = mergeSuiProfiles(onChain, stored);
+  } else if (onChain) {
+    base = onChain;
+  } else if (stored) {
+    base = stored;
+  } else {
+    base = createEmptySuiProfile(normalized);
   }
+
+  if (options.recordDailyLogin) {
+    const withStreak = applyDailyLoginToProfile(base, options.now ?? new Date());
+    saveWalletSuiProfile(normalized, withStreak);
+    return withStreak;
+  }
+
   if (onChain) {
-    saveWalletSuiProfile(normalized, onChain);
-    return onChain;
+    saveWalletSuiProfile(normalized, base);
   }
-  if (stored) {
-    return stored;
-  }
-  return createEmptySuiProfile(normalized);
+  return base;
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   MAX_GAME_LEVEL,
   MAX_LIL_YETIS_RECRUITED,
   SUI_BADGE_DEFINITIONS,
+  hasStreakFireBadge,
   shortenSuiAddress,
   type SuiBadgeId,
   type SuiPlayerProfile,
@@ -30,10 +31,41 @@ interface ProfileModalProps {
   onClose: () => void;
 }
 
+function FlameGlyph({
+  active,
+  className = 'w-4 h-4 shrink-0',
+}: {
+  active: boolean;
+  className?: string;
+}) {
+  const outerStroke = active ? '#FB923C' : 'rgba(214,228,251,0.38)';
+  const outerFill = active ? 'rgba(249,115,22,0.28)' : 'rgba(255,255,255,0.04)';
+  const innerFill = active ? '#FFD15C' : 'rgba(214,228,251,0.24)';
+
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      <path
+        d="M12.3 3C12.8 6.4 16.8 7.8 17.5 12.1C18.1 15.8 15.6 19.5 12 19.5C8.3 19.5 6 16.5 6.4 12.6C6.7 10.1 8.3 8.4 9.5 7C9.4 8.7 10.2 9.9 11.1 10.3C10.5 7.9 10.8 5.2 12.3 3Z"
+        fill={outerFill}
+        stroke={outerStroke}
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12.1 11.4C13.4 12.8 14.3 14.1 14 15.8C13.8 17 13 17.8 12 17.8C10.9 17.8 10 16.9 10 15.6C10 14.3 11 12.9 12.1 11.4Z"
+        fill={innerFill}
+      />
+    </svg>
+  );
+}
+
 function BadgeGlyph({ id, unlocked }: { id: SuiBadgeId; unlocked: boolean }) {
   const stroke = unlocked ? '#FFD15C' : 'rgba(214,228,251,0.38)';
   const fill = unlocked ? 'rgba(245,158,11,0.22)' : 'rgba(255,255,255,0.04)';
 
+  if (id === 'streak_fire') {
+    return <FlameGlyph active={unlocked} />;
+  }
   if (id === 'first_shelter') {
     return (
       <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0" fill="none" aria-hidden="true">
@@ -217,6 +249,9 @@ export function ProfileModal({
   const [copied, setCopied] = useState(false);
   const shortAddr = shortenSuiAddress(session.address);
   const earnedSet = new Set<SuiBadgeId>(profile.badges);
+  const streakFireActive = !loading && hasStreakFireBadge(profile);
+  const streakLabel =
+    profile.loginStreak === 1 ? '1 Day' : `${profile.loginStreak} Days`;
 
   const handleCopyAddress = async () => {
     try {
@@ -321,6 +356,45 @@ export function ProfileModal({
           </div>
         </div>
 
+        {/* Daily Login Streak Counter + Streak Fire Badge */}
+        <div
+          data-testid="profile-daily-streak-card"
+          data-streak-fire={streakFireActive ? 'true' : 'false'}
+          className={`mt-2 flex items-center justify-between gap-2 rounded-xl px-3 py-2 border ${
+            streakFireActive
+              ? 'border-[#FB923C]/55 bg-[#F97316]/14'
+              : 'border-white/14 bg-white/6'
+          }`}
+        >
+          <div className="min-w-0">
+            <p className="text-[9px] font-extrabold uppercase tracking-wider text-[#C8DAF8]">
+              {UI_COPY.wallet.dailyStreakLabel}
+            </p>
+            <p
+              className={`mt-0.5 font-display text-lg font-bold tabular-nums leading-tight ${
+                streakFireActive ? 'text-[#FDBA74]' : 'text-[#FFD15C]'
+              }`}
+              data-testid="profile-login-streak"
+            >
+              {loading ? '…' : streakLabel}
+            </p>
+          </div>
+
+          {streakFireActive ? (
+            <span
+              data-testid="profile-streak-fire-badge"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 border border-[#FB923C]/60 bg-[#F97316]/24 text-[10px] font-extrabold uppercase tracking-wider text-[#FFD15C] shrink-0"
+            >
+              <FlameGlyph active className="w-3.5 h-3.5 shrink-0" />
+              {UI_COPY.wallet.streakFireBadge}
+            </span>
+          ) : (
+            <span className="text-[9.5px] font-semibold text-[#C8DAF8]/75 text-right leading-tight max-w-[130px]">
+              {UI_COPY.wallet.streakKeepGoing}
+            </span>
+          )}
+        </div>
+
         {/* Earned Badges List */}
         <div className="mt-3">
           <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -338,6 +412,11 @@ export function ProfileModal({
           <div className="flex flex-col gap-1.5" data-testid="profile-badges-list">
             {SUI_BADGE_DEFINITIONS.map((badge) => {
               const unlocked = earnedSet.has(badge.id);
+              const isFireBadge = badge.id === 'streak_fire';
+              const requirementText =
+                badge.requiredStreak !== undefined
+                  ? `${badge.requiredStreak}+ DAYS`
+                  : `LV ${badge.requiredLevel}`;
               return (
                 <div
                   key={badge.id}
@@ -345,7 +424,9 @@ export function ProfileModal({
                   data-unlocked={unlocked ? 'true' : 'false'}
                   className={`flex items-center justify-between gap-2 rounded-xl px-2.5 py-1.5 border ${
                     unlocked
-                      ? 'border-[#FFD15C]/45 bg-[#F59E0B]/12 text-white'
+                      ? isFireBadge
+                        ? 'border-[#FB923C]/55 bg-[#F97316]/16 text-white'
+                        : 'border-[#FFD15C]/45 bg-[#F59E0B]/12 text-white'
                       : 'border-white/10 bg-white/4 text-[#C8DAF8]/70'
                   }`}
                 >
@@ -362,10 +443,14 @@ export function ProfileModal({
                   </div>
                   <span
                     className={`text-[9px] font-extrabold uppercase tracking-wider shrink-0 ${
-                      unlocked ? 'text-[#FFD15C]' : 'text-white/40'
+                      unlocked
+                        ? isFireBadge
+                          ? 'text-[#FDBA74]'
+                          : 'text-[#FFD15C]'
+                        : 'text-white/40'
                     }`}
                   >
-                    {unlocked ? UI_COPY.wallet.badgeEarned : `LV ${badge.requiredLevel}`}
+                    {unlocked ? UI_COPY.wallet.badgeEarned : requirementText}
                   </span>
                 </div>
               );

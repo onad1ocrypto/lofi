@@ -122,12 +122,12 @@ export default function App() {
     });
   }, []);
 
-  // Load compact Sui profile whenever a wallet logs in or switches account
+  // Load compact Sui profile and record daily login streak whenever a wallet logs in or switches account
   const loadProfileForAddress = useCallback(async (address: string) => {
     setProfileLoading(true);
     setWalletProfile(createEmptySuiProfile(address));
     try {
-      const loaded = await loadWalletSuiProfile(address);
+      const loaded = await loadWalletSuiProfile(address, { recordDailyLogin: true });
       setWalletProfile(loaded);
     } finally {
       setProfileLoading(false);
