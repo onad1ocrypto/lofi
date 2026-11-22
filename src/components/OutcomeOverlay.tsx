@@ -145,10 +145,10 @@ export function OutcomeOverlay({
       className="fixed inset-0 z-20 pointer-events-auto flex flex-col items-center px-3 py-2 sm:px-6 sm:py-2 overflow-x-hidden overflow-y-auto touch-pan-y outcome-backdrop-fade"
       style={{
         background: isVictory
-          ? 'radial-gradient(circle at 50% 44%, rgba(16, 28, 56, 0.38) 0%, rgba(10, 18, 38, 0.66) 100%)'
-          : 'radial-gradient(circle at 50% 44%, rgba(14, 24, 48, 0.42) 0%, rgba(9, 15, 32, 0.68) 100%)',
-        backdropFilter: 'blur(7px)',
-        WebkitBackdropFilter: 'blur(7px)',
+          ? 'radial-gradient(circle at 50% 44%, rgba(14, 24, 50, 0.24) 0%, rgba(9, 15, 32, 0.48) 100%)'
+          : 'radial-gradient(circle at 50% 44%, rgba(12, 22, 44, 0.28) 0%, rgba(8, 14, 30, 0.52) 100%)',
+        backdropFilter: 'blur(5px)',
+        WebkitBackdropFilter: 'blur(5px)',
       }}
       data-testid={isVictory ? 'outcome-overlay-victory' : 'outcome-overlay-gameover'}
       onPointerDown={(e) => e.stopPropagation()}
@@ -231,14 +231,14 @@ export function OutcomeOverlay({
         </div>
 
         {/* 3. Arrival / Summary Card & Action Buttons strictly below hero and snowboard in normal flow */}
-        <div className="w-full max-w-lg shrink-0 flex flex-col items-center gap-2 pb-0.5">
+        <div className="w-full max-w-md shrink-0 flex flex-col items-center gap-1.5 pb-0.5">
           {isVictory ? (
             <div
-              className="w-full rounded-2xl px-3.5 py-2 sm:px-4 sm:py-2.5 border border-white/22 bg-[#0e1a36]/54 backdrop-blur-md shadow-[0_10px_28px_rgba(8,14,32,0.34)] flex flex-col gap-1 text-center text-[clamp(12px,1.1vw,15px)] leading-snug"
+              className="w-full rounded-xl px-3 py-1.5 sm:px-3.5 sm:py-2 border border-white/16 bg-[#0a1428]/28 backdrop-blur-md shadow-[0_6px_18px_rgba(8,14,32,0.18)] flex flex-col gap-1 text-center text-[clamp(12px,1.1vw,15px)] leading-snug"
               data-testid="victory-arrival-card"
             >
               <div
-                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 font-bold text-[#EDF4FF] border-b border-white/15 pb-1"
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 font-bold text-[#EDF4FF] border-b border-white/12 pb-1"
                 data-testid="victory-arrived-followers"
               >
                 <span className="text-[#C8DAF8] uppercase tracking-wider text-[clamp(10px,0.95vw,12px)]">
@@ -250,7 +250,7 @@ export function OutcomeOverlay({
               </div>
 
               <div
-                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 font-bold text-[#EDF4FF] border-b border-white/15 pb-1"
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 font-bold text-[#EDF4FF] border-b border-white/12 pb-1"
                 data-testid="victory-score-summary"
               >
                 <span className="text-[#C8DAF8] uppercase tracking-wider text-[clamp(10px,0.95vw,12px)]">
@@ -288,19 +288,19 @@ export function OutcomeOverlay({
             </div>
           ) : (
             <div
-              className="w-full rounded-2xl px-3.5 py-2 sm:px-4 sm:py-2.5 border border-white/22 bg-[#0e1a36]/54 backdrop-blur-md shadow-[0_10px_28px_rgba(8,14,32,0.34)] flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[clamp(12px,1.1vw,15px)] leading-snug font-bold text-[#EDF4FF]"
+              className="w-full rounded-xl px-3 py-1.5 sm:px-3.5 sm:py-2 border border-white/16 bg-[#0a1428]/28 backdrop-blur-md shadow-[0_6px_18px_rgba(8,14,32,0.18)] flex flex-wrap items-center justify-center gap-x-2.5 gap-y-0.5 text-[clamp(12px,1.1vw,15px)] leading-snug font-bold text-[#EDF4FF]"
               data-testid="gameover-summary"
             >
               <span className="tabular-nums" data-testid="gameover-level-info">
                 {model.levelInfoLabel}
               </span>
-              <span className="text-white/45" aria-hidden="true">·</span>
+              <span className="text-white/40" aria-hidden="true">·</span>
               <span className="text-[#FFD15C]" data-testid="gameover-follower-info">
                 {model.arrivedFollowersLabel}
               </span>
               {(model.score > 0 || model.grabCount > 0) && (
                 <>
-                  <span className="text-white/45" aria-hidden="true">·</span>
+                  <span className="text-white/40" aria-hidden="true">·</span>
                   <span className="tabular-nums text-white" data-testid="gameover-score-info">
                     Score {model.score.toLocaleString()}
                     {model.peakMultiplier > 1 ? ` (Max ×${model.peakMultiplier})` : ''}
@@ -312,7 +312,7 @@ export function OutcomeOverlay({
 
           {/* Action Buttons */}
           {isVictory ? (
-            <div className="flex flex-col items-center gap-2 w-full">
+            <div className="flex flex-col items-center gap-1.5 w-full">
               {model.hasNextLevel ? (
                 <button
                   type="button"
@@ -320,7 +320,7 @@ export function OutcomeOverlay({
                   data-testid="btn-next-level"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={handleNextOnce}
-                  className="font-display cursor-pointer px-8 sm:px-10 py-2.5 sm:py-2.5 rounded-2xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(17px,1.75vw,22px)] leading-tight font-bold tracking-wider uppercase border-[3px] border-[#161E36] shadow-[0_4px_0_#161E36,0_10px_22px_rgba(10,16,32,0.45)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
+                  className="font-display cursor-pointer px-7 sm:px-9 py-2 rounded-xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(16px,1.6vw,20px)] leading-tight font-bold tracking-wider uppercase border-2 border-[#161E36] shadow-[0_3px_0_#161E36,0_8px_18px_rgba(10,16,32,0.34)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
                 >
                   {UI_COPY.victory.nextLevelButton}
                 </button>
@@ -331,19 +331,19 @@ export function OutcomeOverlay({
                   data-testid="btn-new-game"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={handleNewGameOnce}
-                  className="font-display cursor-pointer px-8 sm:px-10 py-2.5 sm:py-2.5 rounded-2xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(17px,1.75vw,22px)] leading-tight font-bold tracking-wider uppercase border-[3px] border-[#161E36] shadow-[0_4px_0_#161E36,0_10px_22px_rgba(10,16,32,0.45)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
+                  className="font-display cursor-pointer px-7 sm:px-9 py-2 rounded-xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(16px,1.6vw,20px)] leading-tight font-bold tracking-wider uppercase border-2 border-[#161E36] shadow-[0_3px_0_#161E36,0_8px_18px_rgba(10,16,32,0.34)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
                 >
                   {UI_COPY.victory.playAgainButton}
                 </button>
               )}
 
-              <div className="flex flex-wrap items-center justify-center gap-2">
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
                 <button
                   type="button"
                   data-testid="btn-victory-retry"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={handleRetryOnce}
-                  className="cursor-pointer px-4 py-1.5 min-h-[38px] rounded-xl bg-[#162549]/62 hover:bg-[#1f3466]/78 backdrop-blur-md text-white text-[clamp(11px,1vw,13px)] font-extrabold uppercase tracking-wider border border-white/24 shadow-[0_4px_14px_rgba(8,14,32,0.28)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FD1FF]"
+                  className="cursor-pointer px-3.5 py-1 min-h-[34px] rounded-lg bg-[#0a1428]/28 hover:bg-[#14254a]/46 backdrop-blur-md text-white text-[clamp(10.5px,0.95vw,12px)] font-extrabold uppercase tracking-wider border border-white/16 shadow-[0_2px_10px_rgba(8,14,32,0.16)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FD1FF]"
                 >
                   {UI_COPY.victory.replayLevelButton}
                 </button>
@@ -352,21 +352,21 @@ export function OutcomeOverlay({
                   data-testid="btn-victory-menu"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={onReturnToTitle}
-                  className="cursor-pointer px-4 py-1.5 min-h-[38px] rounded-xl bg-[#0e1a36]/54 hover:bg-[#182a54]/72 backdrop-blur-md text-[#DCEAFF] text-[clamp(11px,1vw,13px)] font-extrabold uppercase tracking-wider border border-white/20 shadow-[0_4px_14px_rgba(8,14,32,0.25)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FD1FF]"
+                  className="cursor-pointer px-3.5 py-1 min-h-[34px] rounded-lg bg-[#0a1428]/22 hover:bg-[#14254a]/42 backdrop-blur-md text-[#E2EEFF] text-[clamp(10.5px,0.95vw,12px)] font-extrabold uppercase tracking-wider border border-white/14 shadow-[0_2px_10px_rgba(8,14,32,0.14)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FD1FF]"
                 >
                   {UI_COPY.victory.mainMenuButton}
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2 w-full">
+            <div className="flex flex-col items-center gap-1.5 w-full">
               <button
                 type="button"
                 data-start="true"
                 data-testid="btn-retry-level"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={handleRetryOnce}
-                className="font-display cursor-pointer px-10 py-2.5 sm:py-2.5 rounded-2xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(17px,1.75vw,22px)] leading-tight font-bold tracking-wider uppercase border-[3px] border-[#161E36] shadow-[0_4px_0_#161E36,0_10px_22px_rgba(10,16,32,0.45)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
+                className="font-display cursor-pointer px-8 py-2 rounded-xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(16px,1.6vw,20px)] leading-tight font-bold tracking-wider uppercase border-2 border-[#161E36] shadow-[0_3px_0_#161E36,0_8px_18px_rgba(10,16,32,0.34)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
               >
                 {UI_COPY.gameover.tryAgainButton}
               </button>
@@ -375,7 +375,7 @@ export function OutcomeOverlay({
                 data-testid="btn-gameover-menu"
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={onReturnToTitle}
-                className="cursor-pointer px-5 py-1.5 min-h-[38px] rounded-xl bg-[#0e1a36]/54 hover:bg-[#182a54]/72 backdrop-blur-md text-[#DCEAFF] text-[clamp(11px,1vw,13px)] font-extrabold uppercase tracking-wider border border-white/20 shadow-[0_4px_14px_rgba(8,14,32,0.25)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FD1FF]"
+                className="cursor-pointer px-4 py-1 min-h-[34px] rounded-lg bg-[#0a1428]/24 hover:bg-[#14254a]/42 backdrop-blur-md text-[#E2EEFF] text-[clamp(10.5px,0.95vw,12px)] font-extrabold uppercase tracking-wider border border-white/14 shadow-[0_2px_10px_rgba(8,14,32,0.14)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8FD1FF]"
               >
                 {UI_COPY.gameover.mainMenuButton}
               </button>

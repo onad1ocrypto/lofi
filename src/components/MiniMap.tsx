@@ -47,15 +47,15 @@ export function MiniMap({ miniMap, avalancheDanger }: MiniMapProps) {
     <aside
       aria-label={formatMiniMapAriaLabel(layout.levelNumber, layout.difficultyLabel)}
       data-testid="hud-minimap"
-      className="pointer-events-none select-none flex flex-col rounded-xl sm:rounded-2xl border border-white/24 bg-[#0e1a36]/42 backdrop-blur-md shadow-[0_6px_20px_rgba(8,14,32,0.2)] overflow-hidden w-[82px] sm:w-[116px]"
+      className="pointer-events-none select-none flex flex-col rounded-lg sm:rounded-xl border border-white/16 bg-[#0a1428]/18 backdrop-blur-[6px] shadow-[0_2px_10px_rgba(8,14,32,0.10)] overflow-hidden w-[66px] sm:w-[90px]"
     >
       {/* Compact Header */}
-      <div className="flex items-center justify-between gap-1 px-2 py-1 sm:px-2.5 sm:py-1.5 border-b border-white/14 bg-[#0a1328]/32">
-        <span className="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider text-[#E2EEFF] drop-shadow-[0_1px_2px_rgba(8,14,32,0.65)]">
+      <div className="flex items-center justify-between gap-1 px-1.5 py-0.5 sm:px-2 sm:py-1 border-b border-white/10 bg-[#081124]/16">
+        <span className="text-[8px] sm:text-[9px] font-extrabold uppercase tracking-wider text-[#E8F2FF] drop-shadow-[0_1px_2px_rgba(6,12,28,0.85)]">
           {UI_COPY.hud.mapHeader}
         </span>
         <span
-          className={`text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider drop-shadow-[0_1px_2px_rgba(8,14,32,0.65)] ${badgeTone}`}
+          className={`text-[8px] sm:text-[9px] font-extrabold uppercase tracking-wider drop-shadow-[0_1px_2px_rgba(6,12,28,0.85)] ${badgeTone}`}
           data-testid="minimap-difficulty"
         >
           <span className="hidden sm:inline">{layout.difficultyLabel}</span>
@@ -73,8 +73,8 @@ export function MiniMap({ miniMap, avalancheDanger }: MiniMapProps) {
         >
           <defs>
             <linearGradient id="minimap-bg" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(14, 24, 50, 0.24)" />
-              <stop offset="100%" stopColor="rgba(22, 36, 70, 0.34)" />
+              <stop offset="0%" stopColor="rgba(10, 20, 42, 0.08)" />
+              <stop offset="100%" stopColor="rgba(16, 28, 56, 0.14)" />
             </linearGradient>
             <clipPath id="minimap-ribbon-clip">
               <path d={layout.ribbonPath} />
@@ -89,15 +89,15 @@ export function MiniMap({ miniMap, avalancheDanger }: MiniMapProps) {
             height={MINIMAP_VIEWBOX.height}
             fill="url(#minimap-bg)"
           />
-          <line x1="8" y1="68" x2="104" y2="68" stroke="rgba(205,225,255,0.16)" strokeWidth="1" />
-          <line x1="8" y1="116" x2="104" y2="116" stroke="rgba(205,225,255,0.16)" strokeWidth="1" />
-          <line x1="8" y1="164" x2="104" y2="164" stroke="rgba(205,225,255,0.16)" strokeWidth="1" />
+          <line x1="8" y1="68" x2="104" y2="68" stroke="rgba(215,232,255,0.12)" strokeWidth="1" />
+          <line x1="8" y1="116" x2="104" y2="116" stroke="rgba(215,232,255,0.12)" strokeWidth="1" />
+          <line x1="8" y1="164" x2="104" y2="164" stroke="rgba(215,232,255,0.12)" strokeWidth="1" />
 
           {/* Groomed Snow Track Ribbon */}
           <path
             d={layout.ribbonPath}
-            fill="rgba(232, 244, 255, 0.32)"
-            stroke="rgba(165, 208, 255, 0.68)"
+            fill="rgba(232, 244, 255, 0.26)"
+            stroke="rgba(175, 216, 255, 0.62)"
             strokeWidth="1.4"
             strokeLinejoin="round"
             data-testid="minimap-ribbon"
