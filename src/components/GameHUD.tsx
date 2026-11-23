@@ -19,6 +19,7 @@ interface GameHUDProps {
   walletSession: ConnectedSuiWalletSession | null;
   onOpenConnectWallet: () => void;
   onOpenProfile: () => void;
+  onOpenLeaderboard: () => void;
   onDisconnectWallet: () => void;
   onStart: () => void;
   onPause: () => void;
@@ -35,6 +36,7 @@ interface GameHUDProps {
 }
 
 const OPENING_VIDEO_SRC = '/assets/aistudio/202611221927_31369b59.mp4';
+const OPENING_VIDEO_POSTER = '/assets/aistudio/opening-poster.webp';
 
 /** Custom SVG warm cabin icon matching the in-world finish shelter. */
 function ShelterIcon({ className = 'w-5 h-5' }: { className?: string }) {
@@ -112,6 +114,7 @@ export function GameHUD({
   walletSession,
   onOpenConnectWallet,
   onOpenProfile,
+  onOpenLeaderboard,
   onDisconnectWallet,
   onStart,
   onPause,
@@ -357,6 +360,7 @@ export function GameHUD({
             <video
               ref={introVideoRef}
               src={OPENING_VIDEO_SRC}
+              poster={OPENING_VIDEO_POSTER}
               aria-label="LOFI ICE ESCAPE opening video"
               data-testid="opening-video"
               autoPlay
@@ -445,6 +449,24 @@ export function GameHUD({
 
               <button
                 type="button"
+                data-testid="btn-open-leaderboard"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={onOpenLeaderboard}
+                className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[#FFD15C]/40 bg-[#0c1a38]/30 hover:bg-[#162d59]/50 backdrop-blur-md text-[#FFF6DC] active:translate-y-0.5 shadow-[0_2px_10px_rgba(8,14,32,0.18)] text-[11px] font-extrabold uppercase tracking-wider shrink-0 transition-colors whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD15C]"
+              >
+                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0 text-[#FFD15C]" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6" />
+                  <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18" />
+                  <path d="M4 22h16" />
+                  <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" />
+                  <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" />
+                  <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" />
+                </svg>
+                <span>{UI_COPY.leaderboard.buttonLabel}</span>
+              </button>
+
+              <button
+                type="button"
                 aria-label={muted ? UI_COPY.title.unmuteAria : UI_COPY.title.muteAria}
                 data-testid="btn-cover-mute"
                 onPointerDown={(e) => e.stopPropagation()}
@@ -489,7 +511,7 @@ export function GameHUD({
             <div className="flex flex-1 sm:flex-none items-stretch gap-1.5 sm:gap-2 min-w-0">
               {/* Column 1: Level & Progress toward Shelter */}
               <div
-                className="flex-1 min-w-0 sm:flex-none sm:w-[154px] flex flex-col justify-between gap-0.5 sm:gap-1 rounded-lg sm:rounded-xl px-2 py-1 sm:px-2.5 sm:py-1.5 border border-white/16 bg-[#0a1428]/20 backdrop-blur-[6px] shadow-[0_2px_10px_rgba(8,14,32,0.10)]"
+                className="flex-1 min-w-0 sm:flex-none sm:w-[154px] flex flex-col justify-between gap-0.5 sm:gap-1 rounded-lg sm:rounded-xl px-2 py-1 sm:px-2.5 sm:py-1.5 border border-white/18 bg-[#0a1428]/32 shadow-[0_2px_10px_rgba(8,14,32,0.14)]"
                 aria-label={UI_COPY.hud.shelterAria}
               >
                 <div className="flex items-center justify-between gap-1">
@@ -523,10 +545,10 @@ export function GameHUD({
 
               {/* Column 2 (Desktop): Run Score + Stylish Trick Multiplier */}
               <div
-                className={`hidden sm:flex flex-col justify-between gap-1 w-[138px] rounded-xl px-2.5 py-1.5 border bg-[#0a1428]/20 backdrop-blur-[6px] shadow-[0_2px_10px_rgba(8,14,32,0.10)] transition-colors duration-150 ${
+                className={`hidden sm:flex flex-col justify-between gap-1 w-[138px] rounded-xl px-2.5 py-1.5 border bg-[#0a1428]/32 shadow-[0_2px_10px_rgba(8,14,32,0.14)] transition-colors duration-150 ${
                   hud.scoreFeedbackActive || hud.scoreMultiplier > 1
                     ? 'border-[#FFD15C]/75'
-                    : 'border-white/16'
+                    : 'border-white/18'
                 }`}
                 aria-label={UI_COPY.hud.scoreAria}
               >
@@ -586,7 +608,7 @@ export function GameHUD({
 
               {/* Column 3 (Desktop): Active Lil Yetis (levelNumber - 1, excludes Lofi) */}
               <div
-                className="hidden sm:flex flex-col justify-between gap-1 w-[138px] rounded-xl px-2.5 py-1.5 border border-white/16 bg-[#0a1428]/20 backdrop-blur-[6px] shadow-[0_2px_10px_rgba(8,14,32,0.10)]"
+                className="hidden sm:flex flex-col justify-between gap-1 w-[138px] rounded-xl px-2.5 py-1.5 border border-white/18 bg-[#0a1428]/32 shadow-[0_2px_10px_rgba(8,14,32,0.14)]"
                 aria-label={UI_COPY.hud.lilYetisAria}
               >
                 <div className="flex items-center justify-between gap-1">
@@ -615,8 +637,8 @@ export function GameHUD({
 
               {/* Column 4: Avalanche Threat Meter */}
               <div
-                className={`flex-1 min-w-0 sm:flex-none sm:w-[154px] flex flex-col justify-between gap-0.5 sm:gap-1 rounded-lg sm:rounded-xl px-2 py-1 sm:px-2.5 sm:py-1.5 border bg-[#0a1428]/20 backdrop-blur-[6px] shadow-[0_2px_10px_rgba(8,14,32,0.10)] ${
-                  hud.avalancheDanger > 0.65 ? 'border-[#EF4444]/75' : 'border-white/16'
+                className={`flex-1 min-w-0 sm:flex-none sm:w-[154px] flex flex-col justify-between gap-0.5 sm:gap-1 rounded-lg sm:rounded-xl px-2 py-1 sm:px-2.5 sm:py-1.5 border bg-[#0a1428]/32 shadow-[0_2px_10px_rgba(8,14,32,0.14)] ${
+                  hud.avalancheDanger > 0.65 ? 'border-[#EF4444]/75' : 'border-white/18'
                 }`}
                 aria-label={UI_COPY.hud.avalancheAria}
               >
@@ -668,7 +690,7 @@ export function GameHUD({
                   e.currentTarget.blur();
                   onToggleMute();
                 }}
-                className="cursor-pointer w-8 h-8 sm:w-9 sm:h-9 rounded-lg sm:rounded-xl flex items-center justify-center border border-white/16 bg-[#0a1428]/20 hover:bg-[#13254a]/42 backdrop-blur-[6px] text-white active:translate-y-0.5 shadow-[0_2px_10px_rgba(8,14,32,0.10)] transition-colors"
+                className="cursor-pointer w-8 h-8 sm:w-9 sm:h-9 rounded-lg sm:rounded-xl flex items-center justify-center border border-white/18 bg-[#0a1428]/32 hover:bg-[#13254a]/52 text-white active:translate-y-0.5 shadow-[0_2px_10px_rgba(8,14,32,0.14)] transition-colors"
               >
                 {muted ? (
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" strokeWidth="2.2">
@@ -692,7 +714,7 @@ export function GameHUD({
                   if (isPaused) onResume();
                   else onPause();
                 }}
-                className="cursor-pointer w-8 h-8 sm:w-9 sm:h-9 rounded-lg sm:rounded-xl flex items-center justify-center border border-white/16 bg-[#0a1428]/20 hover:bg-[#13254a]/42 backdrop-blur-[6px] text-white active:translate-y-0.5 shadow-[0_2px_10px_rgba(8,14,32,0.10)] transition-colors"
+                className="cursor-pointer w-8 h-8 sm:w-9 sm:h-9 rounded-lg sm:rounded-xl flex items-center justify-center border border-white/18 bg-[#0a1428]/32 hover:bg-[#13254a]/52 text-white active:translate-y-0.5 shadow-[0_2px_10px_rgba(8,14,32,0.14)] transition-colors"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="currentColor">
                   <rect x="6" y="5" width="4.2" height="14" rx="1.2" />
@@ -706,10 +728,10 @@ export function GameHUD({
           <div className="flex sm:hidden items-center justify-between gap-1.5">
             <div className="flex items-center gap-1 min-w-0">
               <div
-                className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 border bg-[#0a1428]/22 backdrop-blur-[6px] shadow-[0_2px_8px_rgba(8,14,32,0.10)] transition-colors duration-150 ${
+                className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 border bg-[#0a1428]/34 shadow-[0_2px_8px_rgba(8,14,32,0.14)] transition-colors duration-150 ${
                   hud.scoreFeedbackActive || hud.scoreMultiplier > 1
                     ? 'border-[#FFD15C]/80'
-                    : 'border-white/16'
+                    : 'border-white/18'
                 }`}
                 aria-label={UI_COPY.hud.scoreAria}
                 data-testid="hud-score-mobile"
@@ -736,7 +758,7 @@ export function GameHUD({
               </div>
 
               <div
-                className="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 border border-white/16 bg-[#0a1428]/22 backdrop-blur-[6px] shadow-[0_2px_8px_rgba(8,14,32,0.10)]"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 border border-white/18 bg-[#0a1428]/34 shadow-[0_2px_8px_rgba(8,14,32,0.14)]"
                 aria-label={UI_COPY.hud.lilYetisAria}
                 data-testid="hud-followers-mobile"
               >
@@ -751,7 +773,7 @@ export function GameHUD({
 
             {hud.grabCount > 0 && (
               <div
-                className="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 border border-[#FFB952]/40 bg-[#0a1428]/22 backdrop-blur-[6px] shadow-[0_2px_8px_rgba(8,14,32,0.10)] shrink-0"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-0.5 border border-[#FFB952]/45 bg-[#0a1428]/34 shadow-[0_2px_8px_rgba(8,14,32,0.14)] shrink-0"
                 data-testid="hud-grabs-mobile"
               >
                 <span className="text-[9.5px] font-extrabold text-[#FFD15C] drop-shadow-[0_1px_2px_rgba(6,12,28,0.85)] tabular-nums">
@@ -767,7 +789,7 @@ export function GameHUD({
       {isPlaying && levelStartBannerText && !hud.steepWarningActive && (
         <div className="fixed inset-x-0 top-[86px] sm:top-[64px] pointer-events-none flex justify-center px-4 z-10">
           <div
-            className="rounded-xl px-3 py-1 sm:px-3.5 sm:py-1.5 border border-[#FFD15C]/35 bg-[#0a1428]/26 backdrop-blur-[6px] shadow-[0_4px_14px_rgba(8,14,32,0.16)] text-center"
+            className="rounded-xl px-3 py-1 sm:px-3.5 sm:py-1.5 border border-[#FFD15C]/40 bg-[#0a1428]/38 shadow-[0_4px_14px_rgba(8,14,32,0.20)] text-center"
             data-testid="level-start-callout"
           >
             <p className="text-[9px] font-extrabold uppercase tracking-widest text-[#DCEBFF] drop-shadow-[0_1px_2px_rgba(6,12,28,0.85)]">
@@ -786,7 +808,7 @@ export function GameHUD({
           <div
             role="status"
             aria-live="polite"
-            className="w-full sm:w-auto max-w-full rounded-xl px-2.5 py-1 sm:px-4 sm:py-1.5 border border-[#FFB347]/70 bg-[#0a1428]/38 backdrop-blur-[6px] shadow-[0_6px_18px_rgba(8,14,32,0.22)] text-center"
+            className="w-full sm:w-auto max-w-full rounded-xl px-2.5 py-1 sm:px-4 sm:py-1.5 border border-[#FFB347]/70 bg-[#0a1428]/52 shadow-[0_6px_18px_rgba(8,14,32,0.26)] text-center"
             data-testid="steep-drop-warning"
           >
             <p className="font-display text-[10.5px] sm:text-sm font-bold tracking-wide uppercase leading-tight text-[#FFD15C] drop-shadow-[0_1px_2px_rgba(6,12,28,0.88)]">
@@ -845,12 +867,12 @@ export function GameHUD({
                 releaseBrakeTouch();
               }}
               onContextMenu={(e) => e.preventDefault()}
-              className={`flex sm:hidden pointer-events-auto select-none touch-none items-center justify-center rounded-xl w-[68px] h-12 border backdrop-blur-[6px] font-display text-xs font-bold tracking-wider uppercase transition-transform ${
+              className={`flex sm:hidden pointer-events-auto select-none touch-none items-center justify-center rounded-xl w-[68px] h-12 border font-display text-xs font-bold tracking-wider uppercase transition-transform ${
                 brakePressed || hud.isBraking
-                  ? 'scale-95 bg-[#38BDF8]/78 text-[#0F1B35] border-[#E0F2FE] shadow-[0_2px_10px_rgba(8,14,32,0.22)]'
+                  ? 'scale-95 bg-[#38BDF8]/84 text-[#0F1B35] border-[#E0F2FE] shadow-[0_2px_10px_rgba(8,14,32,0.22)]'
                   : hud.steepPhase === 'APPROACH' || hud.steepPhase === 'DESCENT'
-                    ? 'bg-[#EB7A28]/72 text-white border-[#FFD15C]/85 shadow-[0_4px_12px_rgba(8,14,32,0.24)]'
-                    : 'bg-[#0a1428]/26 text-white border-white/22 shadow-[0_2px_10px_rgba(8,14,32,0.14)] [text-shadow:0_1px_2px_rgba(6,12,28,0.85)]'
+                    ? 'bg-[#EB7A28]/78 text-white border-[#FFD15C]/85 shadow-[0_4px_12px_rgba(8,14,32,0.24)]'
+                    : 'bg-[#0a1428]/38 text-white border-white/24 shadow-[0_2px_10px_rgba(8,14,32,0.16)] [text-shadow:0_1px_2px_rgba(6,12,28,0.85)]'
               }`}
             >
               {UI_COPY.hud.mobileBrake}
@@ -859,7 +881,7 @@ export function GameHUD({
             {hud.isGrabbing && hud.canScoreCurrentGrab && (
               <div className="fixed bottom-20 sm:bottom-16 inset-x-0 flex justify-center pointer-events-none z-10">
                 <div
-                  className="rounded-lg px-2.5 py-1 border border-[#FFD15C]/70 bg-[#0a1428]/34 backdrop-blur-[6px] shadow-[0_4px_14px_rgba(8,14,32,0.20)] inline-flex items-center gap-1.5 whitespace-nowrap"
+                  className="rounded-lg px-2.5 py-1 border border-[#FFD15C]/70 bg-[#0a1428]/46 shadow-[0_4px_14px_rgba(8,14,32,0.22)] inline-flex items-center gap-1.5 whitespace-nowrap"
                   data-testid="hud-live-grab"
                 >
                   <span className="font-display text-xs sm:text-sm font-bold tracking-wider text-[#FFD15C] drop-shadow-[0_1px_2px_rgba(6,12,28,0.88)] uppercase">
@@ -877,7 +899,7 @@ export function GameHUD({
                 className="fixed bottom-20 inset-x-0 flex justify-center pointer-events-none sm:static sm:inset-auto sm:block"
               >
                 <div
-                  className="rounded-lg px-2.5 py-1 border border-[#FFB952]/65 bg-[#0a1428]/32 backdrop-blur-[6px] shadow-[0_4px_14px_rgba(8,14,32,0.18)] inline-flex items-center gap-1.5 whitespace-nowrap"
+                  className="rounded-lg px-2.5 py-1 border border-[#FFB952]/65 bg-[#0a1428]/44 shadow-[0_4px_14px_rgba(8,14,32,0.20)] inline-flex items-center gap-1.5 whitespace-nowrap"
                   data-testid="hud-grab-toast"
                 >
                   <span className="font-display text-xs sm:text-sm font-bold tracking-wider text-[#FFD15C] drop-shadow-[0_1px_2px_rgba(6,12,28,0.88)] uppercase">
@@ -903,7 +925,7 @@ export function GameHUD({
             {/* Desktop compact grab count readout beside the dedicated TRICK button */}
             {hud.grabCount > 0 && !hud.isGrabbing && (
               <div
-                className="hidden sm:flex items-center gap-1.5 rounded-lg px-2.5 py-1 border border-white/16 bg-[#0a1428]/24 backdrop-blur-[6px]"
+                className="hidden sm:flex items-center gap-1.5 rounded-lg px-2.5 py-1 border border-white/18 bg-[#0a1428]/34"
                 data-testid="hud-grab-desktop"
               >
                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#FFD15C] drop-shadow-[0_1px_2px_rgba(6,12,28,0.85)]">
@@ -925,7 +947,7 @@ export function GameHUD({
                 onJump();
               }}
               onContextMenu={(e) => e.preventDefault()}
-              className="flex sm:hidden pointer-events-auto select-none touch-none items-center justify-center rounded-xl w-[68px] h-12 border backdrop-blur-[6px] font-display text-xs font-bold tracking-wider uppercase active:scale-95 transition-transform bg-[#0c1b3b]/28 text-white border-[#8FD1FF]/45 shadow-[0_2px_10px_rgba(8,14,32,0.14)] [text-shadow:0_1px_2px_rgba(6,12,28,0.85)]"
+              className="flex sm:hidden pointer-events-auto select-none touch-none items-center justify-center rounded-xl w-[68px] h-12 border font-display text-xs font-bold tracking-wider uppercase active:scale-95 transition-transform bg-[#0c1b3b]/40 text-white border-[#8FD1FF]/50 shadow-[0_2px_10px_rgba(8,14,32,0.16)] [text-shadow:0_1px_2px_rgba(6,12,28,0.85)]"
             >
               {UI_COPY.hud.mobileJump}
             </button>
@@ -962,12 +984,12 @@ export function GameHUD({
                 releaseTrickTouch();
               }}
               onContextMenu={(e) => e.preventDefault()}
-              className={`flex pointer-events-auto cursor-pointer select-none touch-none flex-col items-center justify-center rounded-xl w-[68px] h-12 sm:w-auto sm:min-w-[104px] sm:h-10 sm:px-3 border backdrop-blur-[6px] transition-transform ${
+              className={`flex pointer-events-auto cursor-pointer select-none touch-none flex-col items-center justify-center rounded-xl w-[68px] h-12 sm:w-auto sm:min-w-[104px] sm:h-10 sm:px-3 border transition-transform ${
                 trickPressed || hud.isGrabbing
                   ? 'scale-95 bg-[#F59E0B]/88 text-[#141E36] border-[#FFF3C4] shadow-[0_4px_14px_rgba(245,158,11,0.34)]'
                   : hud.jumpState === 'AIRBORNE'
-                    ? 'bg-[#DF722D]/74 text-white border-[#FFD15C]/85 shadow-[0_4px_14px_rgba(8,14,32,0.22)]'
-                    : 'bg-[#0a1428]/26 text-white border-[#FFD15C]/45 hover:bg-[#13254a]/44 shadow-[0_2px_10px_rgba(8,14,32,0.14)]'
+                    ? 'bg-[#DF722D]/78 text-white border-[#FFD15C]/85 shadow-[0_4px_14px_rgba(8,14,32,0.22)]'
+                    : 'bg-[#0a1428]/38 text-white border-[#FFD15C]/45 hover:bg-[#13254a]/52 shadow-[0_2px_10px_rgba(8,14,32,0.16)]'
               }`}
             >
               <span className="flex items-center gap-1 font-display text-xs sm:text-sm font-bold tracking-wider uppercase leading-none whitespace-nowrap drop-shadow-[0_1px_2px_rgba(6,12,28,0.65)]">
@@ -1068,7 +1090,7 @@ export function GameHUD({
             }}
           >
             <div
-              className="rounded-xl px-3.5 py-1.5 border border-[#FFD15C]/45 bg-[#0a1428]/28 backdrop-blur-[6px] shadow-[0_4px_14px_rgba(8,14,32,0.18)]"
+              className="rounded-xl px-3.5 py-1.5 border border-[#FFD15C]/45 bg-[#0a1428]/40 shadow-[0_4px_14px_rgba(8,14,32,0.20)]"
               data-testid="victory-arriving-banner"
             >
               <span className="font-display text-xs sm:text-sm font-bold tracking-wide text-[#FFD15C] drop-shadow-[0_1px_2px_rgba(6,12,28,0.85)]">

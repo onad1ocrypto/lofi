@@ -196,11 +196,11 @@ export function computeLevelSteeringProfile(levelNumber: number): LevelSteeringP
   // t in [0, 1] across Levels 6..10 (Lv6 = 0, Lv7 = 0.25, Lv8 = 0.5, Lv9 = 0.75, Lv10 = 1.0)
   const t = (lv - 6) / 4;
   return {
-    lateralAccel: 56.0 + t * 22.0, // 56 (Lv6) -> 78 (Lv10) m/s^2
-    maxLateralSpeed: 21.5 + t * 6.5, // 21.5 (Lv6) -> 28.0 (Lv10) m/s
-    counterSteerBoost: 1.62 + t * 0.24, // 1.62 (Lv6) -> 1.86 (Lv10)
-    activeDrag: 1.32 - t * 0.24, // 1.32 (Lv6) -> 1.08 (Lv10)
-    airborneMaxLateralFactor: 0.72 + t * 0.08, // 0.72 (Lv6) -> 0.80 (Lv10)
+    lateralAccel: 60.0 + t * 28.0, // 60 (Lv6) -> 88 (Lv10) m/s^2
+    maxLateralSpeed: 23.0 + t * 9.0, // 23.0 (Lv6) -> 32.0 (Lv10) m/s
+    counterSteerBoost: 1.66 + t * 0.26, // 1.66 (Lv6) -> 1.92 (Lv10)
+    activeDrag: 1.28 - t * 0.24, // 1.28 (Lv6) -> 1.04 (Lv10)
+    airborneMaxLateralFactor: 0.74 + t * 0.08, // 0.74 (Lv6) -> 0.82 (Lv10)
   };
 }
 

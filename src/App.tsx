@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GameHUD } from './components/GameHUD';
+import { LeaderboardModal } from './components/LeaderboardModal';
 import { ProfileModal, WalletConnectModal } from './components/WalletModals';
 import { createGameEngine, type GameEngineController } from './game/engine';
 import { createHeroInspector } from './game/heroInspector';
 import { LEVEL_CONFIGS } from './game/levels';
+import { OUTCOME_ASSETS } from './game/outcomeOverlayLogic';
 import {
   buildHudSnapshot,
   createInitialSimulationState,
@@ -111,6 +113,7 @@ export default function App() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [leaderboardModalOpen, setLeaderboardModalOpen] = useState(false);
   const [walletConnecting, setWalletConnecting] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
   const savedVictoryKeyRef = useRef<string | null>(null);
@@ -122,17 +125,44 @@ export default function App() {
     });
   }, []);
 
-  // Load compact Sui profile and record daily login streak whenever a wallet logs in or switches account
+  // Warm outcome PNGs in the background after initial opening paint so Victory & Game Over appear instantly
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const urls = [
+        OUTCOME_ASSETS.victoryHero,
+        OUTCOME_ASSETS.defeatHero,
+        OUTCOME_ASSETS.smallYeti,
+      ];
+      for (const src of urls) {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = src;
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // Load compact Sui profile whenever a wallet logs in or switches account.
+  // Daily Check-In is triggered explicitly via sui:signPersonalMessage in the Player Hub.
   const loadProfileForAddress = useCallback(async (address: string) => {
     setProfileLoading(true);
     setWalletProfile(createEmptySuiProfile(address));
     try {
-      const loaded = await loadWalletSuiProfile(address, { recordDailyLogin: true });
+      const loaded = await loadWalletSuiProfile(address, { recordDailyLogin: false });
       setWalletProfile(loaded);
     } finally {
       setProfileLoading(false);
     }
   }, []);
+
+  const handleUpdateWalletProfile = useCallback(
+    (nextProfile: SuiPlayerProfile) => {
+      if (!walletSession || nextProfile.walletAddress !== walletSession.address) return;
+      saveWalletSuiProfile(walletSession.address, nextProfile);
+      setWalletProfile(nextProfile);
+    },
+    [walletSession],
+  );
 
   const handleDisconnectWallet = useCallback(() => {
     const active = walletSession;
@@ -212,11 +242,12 @@ export default function App() {
     });
   }, [walletSession, hud.phase, hud.levelNumber]);
 
-  // Close wallet/profile overlays if gameplay starts
+  // Close wallet/profile/leaderboard overlays if gameplay starts
   useEffect(() => {
     if (hud.phase === 'playing') {
       setConnectModalOpen(false);
       setProfileModalOpen(false);
+      setLeaderboardModalOpen(false);
     }
   }, [hud.phase]);
 
@@ -310,11 +341,18 @@ export default function App() {
         onOpenConnectWallet={() => {
           setWalletError(null);
           setDetectedWallets(refreshDetectedSuiWallets());
+          setLeaderboardModalOpen(false);
           setConnectModalOpen(true);
         }}
         onOpenProfile={() => {
           if (!walletSession) return;
+          setLeaderboardModalOpen(false);
           setProfileModalOpen(true);
+        }}
+        onOpenLeaderboard={() => {
+          setConnectModalOpen(false);
+          setProfileModalOpen(false);
+          setLeaderboardModalOpen(true);
         }}
         onDisconnectWallet={handleDisconnectWallet}
         onStart={() => engineRef.current?.startGame()}
@@ -353,8 +391,23 @@ export default function App() {
           session={walletSession}
           profile={walletProfile ?? createEmptySuiProfile(walletSession.address)}
           loading={profileLoading}
+          onProfileChange={handleUpdateWalletProfile}
           onDisconnect={handleDisconnectWallet}
           onClose={() => setProfileModalOpen(false)}
+        />
+      )}
+
+      {leaderboardModalOpen && (
+        <LeaderboardModal
+          connectedAddress={walletSession?.address ?? null}
+          activeWalletProfile={walletSession ? walletProfile : null}
+          onConnectWallet={() => {
+            setLeaderboardModalOpen(false);
+            setWalletError(null);
+            setDetectedWallets(refreshDetectedSuiWallets());
+            setConnectModalOpen(true);
+          }}
+          onClose={() => setLeaderboardModalOpen(false)}
         />
       )}
     </main>

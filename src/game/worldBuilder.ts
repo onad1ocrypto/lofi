@@ -15,6 +15,7 @@ import {
   createAvalanchePuffLayouts,
   type AvalanchePuffLayout,
 } from './avalancheVisualLogic';
+import { createArenaBannerSystem } from './arenaBannerBuilder';
 import { createCarvingMoundSystem } from './carvingMoundBuilder';
 import { createLilYetiCollectibleSystem } from './collectibleBuilder';
 import { createFallenLogSystem } from './fallenLogBuilder';
@@ -42,6 +43,12 @@ import {
   createSnowTrailSystem,
   type SnowTrailSystem,
 } from './snowTrailSystem';
+import {
+  SNOW_SURFACE_PALETTE,
+  createSnowSurfaceTextures,
+  createSnowTrackMaterial,
+  type SnowSurfaceTextureSet,
+} from './snowTrackMaterial';
 import {
   TRACK_END_PADDING,
   TRACK_LENGTH,
@@ -72,6 +79,7 @@ export interface WorldHandles {
   updateSky: (cameraPosition: THREE.Vector3) => void;
   setSkyAtmosphericHaze: (r: number, g: number, b: number, hazeAmount: number) => void;
   updateShelter: (time: number) => void;
+  updateBanners: (time: number, windForce?: number) => void;
   updateAvalanche: (
     playerDistance: number,
     avalancheDistance: number,
@@ -87,61 +95,6 @@ export interface WorldHandles {
   dispose: () => void;
 }
 
-/** Procedural tileable snow color + subtle carving track texture. */
-function createSnowTextures(maxAnisotropy: number): {
-  map: THREE.CanvasTexture;
-  bumpMap: THREE.CanvasTexture;
-} {
-  const size = 256;
-  const colorCanvas = document.createElement('canvas');
-  colorCanvas.width = size;
-  colorCanvas.height = size;
-  const cctx = colorCanvas.getContext('2d')!;
-
-  cctx.fillStyle = '#eef4fc';
-  cctx.fillRect(0, 0, size, size);
-
-  for (let x = 0; x < size; x += 8) {
-    cctx.fillStyle = x % 16 === 0 ? 'rgba(182, 200, 228, 0.22)' : 'rgba(255, 255, 255, 0.25)';
-    cctx.fillRect(x, 0, 3, size);
-  }
-
-  for (let i = 0; i < 650; i++) {
-    const sx = (i * 73) % size;
-    const sy = (i * 137) % size;
-    const r = 1 + (i % 3);
-    cctx.fillStyle = i % 2 === 0 ? 'rgba(164, 184, 218, 0.16)' : 'rgba(255, 255, 255, 0.45)';
-    cctx.beginPath();
-    cctx.arc(sx, sy, r, 0, Math.PI * 2);
-    cctx.fill();
-  }
-
-  const bumpCanvas = document.createElement('canvas');
-  bumpCanvas.width = size;
-  bumpCanvas.height = size;
-  const bctx = bumpCanvas.getContext('2d')!;
-  bctx.fillStyle = '#808080';
-  bctx.fillRect(0, 0, size, size);
-  for (let x = 0; x < size; x += 8) {
-    bctx.fillStyle = x % 16 === 0 ? '#747474' : '#8d8d8d';
-    bctx.fillRect(x, 0, 4, size);
-  }
-
-  const map = new THREE.CanvasTexture(colorCanvas);
-  map.colorSpace = THREE.SRGBColorSpace;
-  map.wrapS = THREE.RepeatWrapping;
-  map.wrapT = THREE.RepeatWrapping;
-  map.repeat.set(9, 130);
-  map.anisotropy = Math.min(8, maxAnisotropy);
-
-  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
-  bumpMap.wrapS = THREE.RepeatWrapping;
-  bumpMap.wrapT = THREE.RepeatWrapping;
-  bumpMap.repeat.set(9, 130);
-
-  return { map, bumpMap };
-}
-
 const TERRAIN_CROSS_PROFILE = [
   -3.8, -2.5, -1.6, -1.15, -0.95, -0.55, 0, 0.55, 0.95, 1.15, 1.6, 2.5, 3.8,
 ] as const;
@@ -153,8 +106,7 @@ interface SnowTerrainHandle {
 
 /** Build continuous snow terrain ribbon with in-place vertex updates for distinct per-level arenas. */
 function createSnowTerrain(
-  snowMap: THREE.CanvasTexture,
-  snowBump: THREE.CanvasTexture,
+  snowTextures: SnowSurfaceTextureSet,
   disposables: Array<{ dispose: () => void }>,
 ): SnowTerrainHandle {
   const zMin = -TRACK_START_PADDING;
@@ -168,11 +120,11 @@ function createSnowTerrain(
   const colors = new Float32Array(rows * cols * 3);
   const indices: number[] = [];
 
-  const trackSnow = new THREE.Color(0xeef5ff);
-  const trackGroove = new THREE.Color(0xdce8fa);
-  const steepIceTint = new THREE.Color(0xc2dcf8);
-  const bankShadow = new THREE.Color(0xa6bde2);
-  const outerRidge = new THREE.Color(0xcbd9ef);
+  const trackSnow = new THREE.Color(SNOW_SURFACE_PALETTE.creamyLitHex);
+  const trackGroove = new THREE.Color(SNOW_SURFACE_PALETTE.packedMidHex);
+  const steepIceTint = new THREE.Color(SNOW_SURFACE_PALETTE.steepIceHex);
+  const bankShadow = new THREE.Color(SNOW_SURFACE_PALETTE.bankShadowHex);
+  const outerRidge = new THREE.Color(SNOW_SURFACE_PALETTE.outerRidgeHex);
   const tempColor = new THREE.Color();
 
   for (let r = 0; r < rows - 1; r++) {
@@ -250,15 +202,7 @@ function createSnowTerrain(
 
   rebuildVertices();
 
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    map: snowMap,
-    bumpMap: snowBump,
-    bumpScale: 0.04,
-    vertexColors: true,
-    roughness: 0.82,
-    metalness: 0.02,
-  });
+  const mat = createSnowTrackMaterial(snowTextures);
 
   disposables.push(geo, mat);
   const mesh = new THREE.Mesh(geo, mat);
@@ -295,10 +239,16 @@ export function buildAlpineWorld(
     skyDome.syncToCamera(cameraPosition);
   };
 
-  const { map: snowMap, bumpMap: snowBump } = createSnowTextures(maxAnisotropy);
-  disposables.push(snowMap, snowBump);
+  const snowTextures = createSnowSurfaceTextures(maxAnisotropy);
+  const { map: snowMap, bumpMap: snowBump } = snowTextures;
+  disposables.push(
+    snowTextures.map,
+    snowTextures.normalMap,
+    snowTextures.roughnessMap,
+    snowTextures.bumpMap,
+  );
 
-  const terrain = createSnowTerrain(snowMap, snowBump, disposables);
+  const terrain = createSnowTerrain(snowTextures, disposables);
   scene.add(terrain.mesh);
 
   // 2. Multi-Variant Sculpted Alpine Pines (5 variants) & Chiseled Granite Boulders (3 variants) with Snow Accumulation
@@ -490,6 +440,9 @@ export function buildAlpineWorld(
   // 3b. Level 4 Outside-Curve Boundary Snow Mounds (single InstancedMesh, zero duplication on Retry/Next Level)
   const carvingMounds = createCarvingMoundSystem(scene, snowMap, snowBump);
 
+  // 3c. Overhead "LOFI THE YETI" ski-race fabric banners spanning across start & mid-track gates
+  const arenaBanners = createArenaBannerSystem(scene, maxAnisotropy);
+
   let currentWorldLevel = -1;
   const syncTrackForLevel = (
     levelNumber: number,
@@ -506,6 +459,7 @@ export function buildAlpineWorld(
       currentWorldLevel = levelNumber;
     }
     rampSystem.syncRamps(nextRamps);
+    arenaBanners.syncForLevel(levelNumber, levelLength, nextRamps);
     syncObstacles(nextObstacles);
     collectibleSystem.syncCollectibles(nextCollectibles);
     shelter.setLevelLength(levelLength);
@@ -648,6 +602,7 @@ export function buildAlpineWorld(
     fallenLogSystem.dispose();
     collectibleSystem.dispose();
     carvingMounds.dispose();
+    arenaBanners.dispose();
     snowSpray.dispose();
     snowfall.dispose();
     snowTrail.dispose();
@@ -665,6 +620,7 @@ export function buildAlpineWorld(
     updateSky,
     setSkyAtmosphericHaze: skyDome.setAtmosphericHaze,
     updateShelter,
+    updateBanners: arenaBanners.update,
     updateAvalanche,
     snowSpray,
     snowfall,

@@ -48,6 +48,20 @@ import {
 } from './alpinePropsLogic';
 import { computeArenaDifficultyProfile } from './arenaDifficulty';
 import {
+  ARENA_BANNER_CONFIG,
+  computeArenaBannerPlacements,
+  evaluateBannerClothVertex,
+  isDistanceInsideRampExclusion,
+} from './arenaBannerLogic';
+import {
+  LEADERBOARD_MAX_ENTRIES,
+  LEADERBOARD_MIN_REAL_PROFILES_FOR_NO_SEEDS,
+  LEADERBOARD_POINTS_PER_LEVEL,
+  SEED_LEADERBOARD_RIDERS,
+  buildSuiLeaderboard,
+  computeLeaderboardTotalPoints,
+} from './suiLeaderboardLogic';
+import {
   AVALANCHE_VISUAL_CONFIG,
   computeAvalanchePuffTransform,
   computeAvalancheVisualPose,
@@ -124,28 +138,44 @@ import {
   triggerShelterCelebrationOnce,
 } from './shelterArrival';
 import {
+  DAILY_CHECKIN_BASE_POINTS,
+  DAILY_STREAK_BONUS_POINTS,
   DAILY_STREAK_FIRE_THRESHOLD,
+  DEFAULT_SUI_AVATAR_ID,
   MAX_PROFILE_PAYLOAD_BYTES,
+  MAX_USERNAME_LENGTH,
+  SUI_AVATAR_OPTIONS,
   SUI_BADGE_DEFINITIONS,
   applyDailyLoginToProfile,
   applyLevelCompletionToProfile,
   buildSuiProfileStorageKey,
+  claimBadgeInProfile,
   computeCalendarDayDelta,
+  computeDailyCheckInPointsReward,
   computeRecruitedLilYetis,
   createEmptySuiProfile,
   deriveBadgesForProgress,
+  getBadgeClaimState,
+  getClaimedBadgeDefinitions,
+  getReadyBadgeDefinitions,
+  hasCheckedInToday,
   hasStreakFireBadge,
   isAllowedSuiRpcUrl,
+  isValidAvatarId,
   isValidSuiAddress,
+  lockProfileUsername,
   mergeSuiProfiles,
   normalizeSuiAddress,
   parseSuiProfilePayload,
+  previewNextDailyCheckInReward,
+  sanitizeRiderUsername,
   sanitizeWalletIconUrl,
   serializeSuiProfilePayload,
   shortenSuiAddress,
   toCalendarDateKey,
+  updateProfileIdentity,
 } from './suiProfileLogic';
-import { saveWalletSuiProfile } from './suiWalletService';
+import { getActiveSuiNetworkLabel, saveWalletSuiProfile } from './suiWalletService';
 import { SHELTER_ARCHITECTURE } from './shelterBuilder';
 import { DAYLIGHT_RIG, FOG_CONFIG, SKY_PALETTE } from './skyDome';
 import {
@@ -153,6 +183,7 @@ import {
   advanceToNextLevel,
   buildHudSnapshot,
   computeCarveDustProfile,
+  computeCrashAvalancheChaseMultiplier,
   createInitialInput,
   createInitialSimulationState,
   evaluateRampSurface,
@@ -177,6 +208,17 @@ import {
   resetTrailBuffer,
   stepTrailBuffer,
 } from './snowTrailLogic';
+import {
+  SNOW_SURFACE_CONFIG,
+  SNOW_SURFACE_PALETTE,
+  evaluateSnowNormal,
+  sampleSnowSurfaceField,
+} from './snowTrackMaterial';
+import {
+  PERFORMANCE_BUDGET_CONFIG,
+  computeDevicePerformanceBudget,
+  shouldRenderContinuous3D,
+} from './performanceBudget';
 import {
   computeAmbientAudioTargets,
   fillAlpineWindSamples,
@@ -2580,73 +2622,125 @@ test('English UI terminology and singular/plural Lil Yeti & Crew formatters matc
   assert.equal(/Pengikut|Yeti Kecil|Follower|Small Yeti|TRIK|LOMPAT/i.test(allCopyText), false);
 });
 
-test('3-hit crash tolerance rule: Lofi reliably survives 2 consecutive obstacle hits and loses on the 3rd hit across Levels 1, 3, 5, and 10', () => {
+test('level-scaled avalanche crash chase: defeat occurs strictly when avalanche catches up, chasing faster on higher levels while rewarding clean recovery', () => {
   const input = createInitialInput();
 
-  for (const levelNum of [1, 3, 5, 10]) {
-    const state = createInitialSimulationState('playing', undefined, levelNum);
-    // Start mid-course with clean obstacle list so we trigger 3 exact consecutive hits
-    state.distance = Math.round(state.levelLength * 0.35);
-    state.travelDistance = state.distance;
-    state.avalancheDistance = SIM_CONFIG.avalancheStartDistance;
-    state.obstacles = [];
-
-    const triggerHitAndRecoverToInvulnEnd = () => {
-      // Place an obstacle right in front of Lofi
-      const hitZ = state.distance + 0.4;
-      const hitWorldX = getTrackCenterX(hitZ) + state.lateralOffset;
-      state.obstacles = [
-        {
-          id: state.hitCount + 1,
-          kind: 'rock',
-          z: hitZ,
-          offsetX: state.lateralOffset,
-          worldX: hitWorldX,
-          worldY: 0,
-          radius: 1.4,
-          clearanceHeight: 1.5,
-          scale: 1,
-          scaleX: 1,
-          scaleY: 1,
-          scaleZ: 1,
-          rotationY: 0,
-          tiltX: 0,
-          tiltZ: 0,
-          tint: 1,
-          hit: false,
-        },
-      ];
-
-      // Step into the obstacle and let the entire slowdown + invuln window (~1.5s) play out
-      for (let i = 0; i < 60; i++) {
-        if (state.phase !== 'playing') break;
-        stepSimulation(state, input, 0.025);
-      }
-    };
-
-    // Hit 1 -> MUST survive with healthy avalanche gap
-    triggerHitAndRecoverToInvulnEnd();
-    assert.equal(state.hitCount, 1, `Level ${levelNum}: expected 1st hit registered`);
-    assert.equal(state.phase, 'playing', `Level ${levelNum}: must survive 1st obstacle hit`);
+  // 1. Crash chase multiplier strictly increases from Level 1 to Level 10
+  for (let lv = 2; lv <= 10; lv++) {
     assert.ok(
-      state.avalancheDistance >= 14.0,
-      `Level ${levelNum}: after 1st hit avalanche should stay >= 14m (got ${state.avalancheDistance.toFixed(2)}m)`,
+      computeCrashAvalancheChaseMultiplier(lv) > computeCrashAvalancheChaseMultiplier(lv - 1),
+      `Crash chase multiplier must increase strictly Lv${lv - 1} -> Lv${lv}`,
     );
+  }
+  assert.equal(computeCrashAvalancheChaseMultiplier(1), 1.0);
+  assert.ok(computeCrashAvalancheChaseMultiplier(10) >= 1.5);
 
-    // Hit 2 (immediately after invuln) -> MUST STILL survive in DANGER state!
-    triggerHitAndRecoverToInvulnEnd();
-    assert.equal(state.hitCount, 2, `Level ${levelNum}: expected 2nd hit registered`);
-    assert.equal(state.phase, 'playing', `Level ${levelNum}: must survive 2nd obstacle hit (3-hit rule)`);
+  const runHit = (state: ReturnType<typeof createInitialSimulationState>) => {
+    const hitZ = state.distance + 0.4;
+    const hitWorldX = getTrackCenterX(hitZ) + state.lateralOffset;
+    state.obstacles = [
+      {
+        id: state.hitCount + 1,
+        kind: 'rock',
+        z: hitZ,
+        offsetX: state.lateralOffset,
+        worldX: hitWorldX,
+        worldY: 0,
+        radius: 1.4,
+        clearanceHeight: 1.5,
+        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
+        scaleZ: 1,
+        rotationY: 0,
+        tiltX: 0,
+        tiltZ: 0,
+        tint: 1,
+        hit: false,
+      },
+    ];
+    for (let i = 0; i < 60 && state.phase === 'playing'; i++) {
+      stepSimulation(state, input, 0.025);
+    }
+  };
+
+  // 2. Measure 1st-hit avalanche drop across ALL 10 levels:
+  //    - Every single level survives the 1st obstacle hit cleanly
+  //    - Higher levels lose strictly more avalanche distance per hit (avalanche chases faster!)
+  let prevHit1Loss = 0;
+  for (let lv = 1; lv <= 10; lv++) {
+    const s = createInitialSimulationState('playing', undefined, lv);
+    s.distance = 120;
+    s.travelDistance = 120;
+    const startDist = LEVEL_CONFIGS[lv - 1].avalancheStartDistance;
+    s.avalancheDistance = startDist;
+    s.obstacles = [];
+    s.ramps = [];
+
+    runHit(s);
+    assert.equal(s.hitCount, 1, `Level ${lv}: 1st hit must register`);
+    assert.equal(s.phase, 'playing', `Level ${lv}: Lofi must survive 1st obstacle hit`);
     assert.ok(
-      state.avalancheDistance >= 4.0 && state.avalancheDistance <= 12.0,
-      `Level ${levelNum}: after 2nd hit avalanche should be in recoverable DANGER range 4..12m (got ${state.avalancheDistance.toFixed(2)}m)`,
+      s.avalancheDistance >= 3.5,
+      `Level ${lv}: after 1st hit avalanche must remain survivable >= 3.5m (got ${s.avalancheDistance.toFixed(2)}m)`,
     );
+    const hit1Loss = startDist - s.avalancheDistance;
+    if (lv > 1) {
+      assert.ok(
+        hit1Loss > prevHit1Loss,
+        `Level ${lv}: avalanche must close in faster after a crash than Level ${lv - 1} (loss ${hit1Loss.toFixed(2)}m vs ${prevHit1Loss.toFixed(2)}m)`,
+      );
+    }
+    prevHit1Loss = hit1Loss;
 
-    // Hit 3 (immediately after invuln) -> MUST trigger Game Over!
-    triggerHitAndRecoverToInvulnEnd();
-    assert.equal(state.hitCount, 3, `Level ${levelNum}: expected 3rd hit registered`);
-    assert.equal(state.phase, 'gameover', `Level ${levelNum}: 3rd consecutive hit must trigger Game Over`);
-    assert.equal(state.avalancheDistance, 0);
+    // Clean recovery between mistakes: if Lofi pulls back out to full avalanche lead, a 2nd hit MUST STILL survive (no artificial 2-hit instant death!)
+    s.avalancheDistance = startDist;
+    runHit(s);
+    assert.equal(s.hitCount, 2, `Level ${lv}: 2nd hit after recovery must register`);
+    assert.equal(
+      s.phase,
+      'playing',
+      `Level ${lv}: recovering avalanche distance between hits must allow surviving a 2nd hit`,
+    );
+  }
+
+  // 3. Consecutive unrecovered hits:
+  //    - Levels 1 & 3 (early): survive 2 consecutive hits, caught by avalanche on 3rd consecutive hit
+  //    - Levels 6 & 10 (hard/expert): 1st hit surges close; immediate 2nd consecutive hit without recovering gets caught by avalanche!
+  for (const lv of [1, 3]) {
+    const s = createInitialSimulationState('playing', undefined, lv);
+    s.distance = 120;
+    s.travelDistance = 120;
+    s.avalancheDistance = LEVEL_CONFIGS[lv - 1].avalancheStartDistance;
+    s.obstacles = [];
+    s.ramps = [];
+
+    runHit(s);
+    assert.equal(s.phase, 'playing', `Level ${lv}: survives consecutive Hit 1`);
+    runHit(s);
+    assert.equal(s.phase, 'playing', `Level ${lv}: survives consecutive Hit 2`);
+    runHit(s);
+    assert.equal(s.phase, 'gameover', `Level ${lv}: 3rd consecutive hit lets avalanche catch up`);
+    assert.equal(s.avalancheDistance, 0);
+  }
+
+  for (const lv of [6, 10]) {
+    const s = createInitialSimulationState('playing', undefined, lv);
+    s.distance = 120;
+    s.travelDistance = 120;
+    s.avalancheDistance = LEVEL_CONFIGS[lv - 1].avalancheStartDistance;
+    s.obstacles = [];
+    s.ramps = [];
+
+    runHit(s);
+    assert.equal(s.phase, 'playing', `Level ${lv}: survives Hit 1 with high tension`);
+    runHit(s);
+    assert.equal(
+      s.phase,
+      'gameover',
+      `Level ${lv}: immediate 2nd consecutive hit without recovery lets the faster avalanche catch up`,
+    );
+    assert.equal(s.avalancheDistance, 0);
   }
 });
 
@@ -5357,7 +5451,7 @@ test('custom MP3 SFX mapping: gameOver, road collectible pickup, and finish fanf
   );
   assert.equal(
     SFX_TRACK_SRCS.collectible,
-    '/assets/aistudio/universfield-video-game-bonus-323603_d5dfb245.mp3',
+    '/assets/aistudio/freesound_gamestudio-bar-increase-cartoon-funny-jump-384919_f3db9b8f.mp3',
   );
   assert.equal(
     SFX_TRACK_SRCS.finish,
@@ -5474,21 +5568,22 @@ test('Level 7 — Avalanche Alley: 6 Lil Yetis, downhill-flat-downhill rhythm, n
     let maxFollowerBrake = 0;
 
     for (let step = 0; step < 3600 && s.phase === 'playing'; step++) {
-      // Pick the clearest visible safe lane ahead among [-5.5, -3, 0, 3, 5.5]
-      const candidates = [0, -3.2, 3.2, -5.8, 5.8];
+      // Pick the clearest visible safe lane ahead (prioritizing imminent obstacles first)
+      const candidates = [0, -2.5, 2.5, -5.0, 5.0, -7.5, 7.5];
       let targetLat = 0;
       let bestScore = -Infinity;
       for (const cand of candidates) {
         let minClear = 20;
         for (const obs of s.obstacles) {
           const dz = obs.z - s.distance;
-          if (dz > -1.5 && dz < 42) {
+          if (dz > -1.0 && dz < 36) {
             const latGap = Math.abs(obs.offsetX - cand) - obs.radius;
-            const weightedGap = latGap + (dz / 42) * 1.4;
+            const urgency = Math.max(0, dz) / 36;
+            const weightedGap = latGap + urgency * urgency * 6.0;
             if (weightedGap < minClear) minClear = weightedGap;
           }
         }
-        const score = minClear - Math.abs(cand) * 0.06;
+        const score = minClear - Math.abs(cand) * 0.04 - Math.abs(cand - s.lateralOffset) * 0.06;
         if (score > bestScore) {
           bestScore = score;
           targetLat = cand;
@@ -5496,7 +5591,7 @@ test('Level 7 — Avalanche Alley: 6 Lil Yetis, downhill-flat-downhill rhythm, n
       }
       const slopeAhead = getTrackCenterX(s.distance + 4) - getTrackCenterX(s.distance);
       const desiredWorldLatVel =
-        (targetLat - s.lateralOffset) * 3.4 + (slopeAhead / 4) * s.forwardSpeed;
+        (targetLat - s.lateralOffset) * 4.5 + (slopeAhead / 4) * s.forwardSpeed;
       const input = createInitialInput();
       if (desiredWorldLatVel - s.lateralVelocity > 0.5) input.right = true;
       else if (desiredWorldLatVel - s.lateralVelocity < -0.5) input.left = true;
@@ -5786,20 +5881,23 @@ test('Level 8 — Rock Garden: 7 Lil Yetis, grouped rock layout with readable sh
       if (s.distance >= 415 && s.distance <= 772) {
         targetLat = getDesiredGardenOffset(s.distance);
       } else {
-        // Outside rock garden: pick clearest safe lane ahead
-        const candidates = [0, -3.4, 3.4, -6.0, 6.0];
+        // Outside rock garden: pick clearest safe lane ahead (prioritizing imminent obstacles first)
+        const candidates = [0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5, 7.5];
         let bestScore = -Infinity;
         for (const cand of candidates) {
           let minClear = 20;
           for (const obs of s.obstacles) {
             const dz = obs.z - s.distance;
-            if (dz > -1.5 && dz < 42 && obs.kind !== 'fallen_log') {
-              const latGap = Math.abs(obs.offsetX - cand) - obs.radius;
-              const weightedGap = latGap + (dz / 42) * 1.4;
+            if (dz > -1.0 && dz < 40 && obs.kind !== 'fallen_log') {
+              const reach = Math.min(1, Math.max(0, dz) / 18);
+              const pathX = s.lateralOffset + (cand - s.lateralOffset) * reach;
+              const latGap = Math.abs(obs.offsetX - pathX) - obs.radius;
+              const u = Math.max(0, dz) / 40;
+              const weightedGap = latGap + u * u * 3.0;
               if (weightedGap < minClear) minClear = weightedGap;
             }
           }
-          const score = minClear - Math.abs(cand) * 0.06;
+          const score = minClear - Math.abs(cand) * 0.03;
           if (score > bestScore) {
             bestScore = score;
             targetLat = cand;
@@ -6114,20 +6212,21 @@ test('Level 9 — Double Drop: 8 Lil Yetis, two separate downhills + flat recove
     let maxFollowerBrake = 0;
 
     for (let step = 0; step < 4000 && s.phase === 'playing'; step++) {
-      const candidates = [0, -3.2, 3.2, -5.8, 5.8];
+      const candidates = [0, -2.5, 2.5, -5.0, 5.0, -7.5, 7.5];
       let targetLat = 0;
       let bestScore = -Infinity;
       for (const cand of candidates) {
         let minClear = 20;
         for (const obs of s.obstacles) {
           const dz = obs.z - s.distance;
-          if (dz > -1.5 && dz < 42) {
+          if (dz > -1.0 && dz < 36) {
             const latGap = Math.abs(obs.offsetX - cand) - obs.radius;
-            const weightedGap = latGap + (dz / 42) * 1.4;
+            const urgency = Math.max(0, dz) / 36;
+            const weightedGap = latGap + urgency * urgency * 6.0;
             if (weightedGap < minClear) minClear = weightedGap;
           }
         }
-        const score = minClear - Math.abs(cand) * 0.06;
+        const score = minClear - Math.abs(cand) * 0.04 - Math.abs(cand - s.lateralOffset) * 0.06;
         if (score > bestScore) {
           bestScore = score;
           targetLat = cand;
@@ -6136,7 +6235,7 @@ test('Level 9 — Double Drop: 8 Lil Yetis, two separate downhills + flat recove
 
       const slopeAhead = getTrackCenterX(s.distance + 4) - getTrackCenterX(s.distance);
       const desiredWorldLatVel =
-        (targetLat - s.lateralOffset) * 3.8 + (slopeAhead / 4) * s.forwardSpeed;
+        (targetLat - s.lateralOffset) * 4.5 + (slopeAhead / 4) * s.forwardSpeed;
       const input = createInitialInput();
       if (desiredWorldLatVel - s.lateralVelocity > 0.4) input.right = true;
       else if (desiredWorldLatVel - s.lateralVelocity < -0.4) input.left = true;
@@ -6667,29 +6766,59 @@ test('Sui wallet login & profile logic: Demo Mode isolation, address normalizati
   prof = applyLevelCompletionToProfile(prof, 5, '2026-11-22T12:05:00.000Z');
   assert.equal(prof.highestCompletedLevel, 5);
   assert.equal(prof.lilYetisRecruited, 5);
-  assert.deepEqual(prof.badges, ['first_shelter', 'steep_survivor', 'alpine_carver']);
+  assert.deepEqual(prof.badges, [
+    'first_shelter',
+    'growing_crew',
+    'carving_master',
+    'airborne_yeti',
+  ]);
 
   // Completing an earlier level (e.g. Level 2 replay) must NEVER regress highest level or badges
   const afterReplay = applyLevelCompletionToProfile(prof, 2, '2026-11-22T12:06:00.000Z');
   assert.equal(afterReplay.highestCompletedLevel, 5);
   assert.equal(afterReplay.lilYetisRecruited, 5);
-  assert.deepEqual(afterReplay.badges, ['first_shelter', 'steep_survivor', 'alpine_carver']);
+  assert.deepEqual(afterReplay.badges, [
+    'first_shelter',
+    'growing_crew',
+    'carving_master',
+    'airborne_yeti',
+  ]);
 
-  // Completing Level 10 caps Lil Yetis strictly at 9 and unlocks all 5 level progression badges
+  // Completing Level 10 caps Lil Yetis strictly at 9 and unlocks all 6 level progression badges
   const summitProf = applyLevelCompletionToProfile(afterReplay, 10, '2026-11-22T12:10:00.000Z');
   assert.equal(summitProf.highestCompletedLevel, 10);
   assert.equal(summitProf.lilYetisRecruited, 9);
   assert.equal(computeRecruitedLilYetis(10), 9);
-  assert.equal(SUI_BADGE_DEFINITIONS.length, 6);
+  assert.equal(SUI_BADGE_DEFINITIONS.length, 7);
   assert.deepEqual(
-    summitProf.badges,
-    ['first_shelter', 'steep_survivor', 'alpine_carver', 'yeti_squad', 'summit_champion'],
+    SUI_BADGE_DEFINITIONS.map((b) => b.id),
+    [
+      'new_user_verified',
+      'first_shelter',
+      'growing_crew',
+      'carving_master',
+      'airborne_yeti',
+      'slalom_pro',
+      'summit_champion',
+    ],
   );
+  for (const badge of SUI_BADGE_DEFINITIONS) {
+    const diskPath = path.resolve(process.cwd(), 'public', badge.imageSrc.replace(/^\/+/, ''));
+    assert.equal(fs.existsSync(diskPath), true, `Badge PNG ${badge.imageSrc} must exist on disk`);
+  }
+  assert.deepEqual(summitProf.badges, [
+    'first_shelter',
+    'growing_crew',
+    'carving_master',
+    'airborne_yeti',
+    'slalom_pro',
+    'summit_champion',
+  ]);
 
   // 4. Compact Sui payload serialization: strictly tiny metadata only (no audio, images, or secrets)
   const serialized = serializeSuiProfilePayload(summitProf);
   assert.ok(
-    serialized.length < 350 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
+    serialized.length < 450 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
     `Serialized Sui profile must remain tiny (got ${serialized.length} bytes)`,
   );
   assert.equal(serialized.includes('privateKey'), false);
@@ -6720,7 +6849,7 @@ test('Sui wallet login & profile logic: Demo Mode isolation, address normalizati
   assert.equal(tampered.highestCompletedLevel, 3);
   assert.equal(tampered.lilYetisRecruited, 9, 'Lil Yetis count must be clamped <= 9');
   assert.equal(tampered.badges.includes('injected_fake_badge' as never), false);
-  assert.deepEqual(deriveBadgesForProgress(3, 3), ['first_shelter', 'steep_survivor']);
+  assert.deepEqual(deriveBadgesForProgress(3, 3), ['first_shelter', 'growing_crew']);
 
   // 5. Monotonic merge preserves highest progress across devices/reloads & isolates wallets
   const merged = mergeSuiProfiles(prof, summitProf);
@@ -6744,9 +6873,13 @@ test('Sui wallet login & profile logic: Demo Mode isolation, address normalizati
   );
 });
 
-test('Sui daily login streak counter and Streak Fire badge: consecutive days, same-day idempotence, missed-day reset, serialization, and merge', () => {
+test('Sui daily check-in streak & points (points only, no badge): consecutive days, 2-day Streak Fire bonus, same-day idempotence, missed-day reset, serialization, and merge', () => {
   const wallet = '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234569f0e';
   assert.equal(DAILY_STREAK_FIRE_THRESHOLD, 2);
+  assert.equal(DAILY_CHECKIN_BASE_POINTS, 100);
+  assert.equal(DAILY_STREAK_BONUS_POINTS, 50);
+  assert.deepEqual(computeDailyCheckInPointsReward(1), { base: 100, streakBonus: 0, total: 100 });
+  assert.deepEqual(computeDailyCheckInPointsReward(2), { base: 100, streakBonus: 50, total: 150 });
 
   // Calendar date key validation & day delta calculation
   assert.equal(toCalendarDateKey('2026-11-22'), '2026-11-22');
@@ -6757,43 +6890,61 @@ test('Sui daily login streak counter and Streak Fire badge: consecutive days, sa
   assert.equal(computeCalendarDayDelta('2026-11-22', '2026-11-22'), 0);
   assert.equal(computeCalendarDayDelta('2026-11-20', '2026-11-22'), 2);
 
-  // 1. First login starts streak at 1 without activating Streak Fire yet
+  // 1. First check-in starts streak at 1, awards base points (+100), and unlocks NO badges
   const empty = createEmptySuiProfile(wallet, '2026-11-20T09:00:00.000Z');
   assert.equal(empty.loginStreak, 0);
+  assert.equal(empty.checkInPoints, 0);
   assert.equal(empty.lastLoginDate, null);
   assert.equal(hasStreakFireBadge(empty), false);
+  assert.deepEqual(previewNextDailyCheckInReward(empty, '2026-11-20'), {
+    base: 100,
+    streakBonus: 0,
+    total: 100,
+  });
 
   const day1 = applyDailyLoginToProfile(empty, '2026-11-20', '2026-11-20T09:00:00.000Z');
   assert.equal(day1.loginStreak, 1);
+  assert.equal(day1.checkInPoints, 100);
   assert.equal(day1.lastLoginDate, '2026-11-20');
   assert.equal(hasStreakFireBadge(day1), false);
-  assert.equal(day1.badges.includes('streak_fire'), false);
+  assert.deepEqual(day1.badges, [], 'Daily check-in must award points only and never unlock a badge');
 
-  // 2. Repeated login on the same calendar day is idempotent
+  // 2. Repeated check-in on the same calendar day is idempotent (no duplicate points)
   const day1Again = applyDailyLoginToProfile(day1, '2026-11-20', '2026-11-20T21:30:00.000Z');
   assert.equal(day1Again.loginStreak, 1);
+  assert.equal(day1Again.checkInPoints, 100);
   assert.equal(day1Again.lastLoginDate, '2026-11-20');
   assert.equal(hasStreakFireBadge(day1Again), false);
 
-  // 3. Consecutive daily login increments streak and activates Streak Fire badge
+  // Preview on Day 2 shows +150 pts (+50 Streak Fire bonus)
+  assert.deepEqual(previewNextDailyCheckInReward(day1Again, '2026-11-21'), {
+    base: 100,
+    streakBonus: 50,
+    total: 150,
+  });
+
+  // 3. Consecutive daily check-in activates 2-day Streak Fire bonus (+150 pts) — STILL NO badge
   const day2 = applyDailyLoginToProfile(day1Again, '2026-11-21', '2026-11-21T08:00:00.000Z');
   assert.equal(day2.loginStreak, 2);
+  assert.equal(day2.checkInPoints, 250);
   assert.equal(day2.lastLoginDate, '2026-11-21');
   assert.equal(hasStreakFireBadge(day2), true);
-  assert.equal(day2.badges.includes('streak_fire'), true);
+  assert.deepEqual(day2.badges, [], '2-day Streak Fire bonus is points-only and never unlocks a badge');
 
   const day3 = applyDailyLoginToProfile(day2, '2026-11-22', '2026-11-22T10:15:00.000Z');
   assert.equal(day3.loginStreak, 3);
+  assert.equal(day3.checkInPoints, 400);
   assert.equal(day3.lastLoginDate, '2026-11-22');
   assert.equal(hasStreakFireBadge(day3), true);
-  assert.equal(day3.badges.includes('streak_fire'), true);
+  assert.deepEqual(day3.badges, []);
 
-  // Completing levels while on a streak preserves streak & Streak Fire badge
+  // Completing Level 1 unlocks only First Shelter while preserving streak & points
   const day3WithWin = applyLevelCompletionToProfile(day3, 1, '2026-11-22T10:20:00.000Z');
   assert.equal(day3WithWin.loginStreak, 3);
-  assert.deepEqual(day3WithWin.badges, ['first_shelter', 'streak_fire']);
+  assert.equal(day3WithWin.checkInPoints, 400);
+  assert.deepEqual(day3WithWin.badges, ['first_shelter']);
 
-  // 4. Compact Sui payload round-trips loginStreak, lastLoginDate, and streak_fire badge
+  // 4. Compact Sui payload round-trips loginStreak, lastLoginDate, and checkInPoints
   const serialized = serializeSuiProfilePayload(day3WithWin);
   assert.ok(
     serialized.length < 350 && serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
@@ -6802,27 +6953,30 @@ test('Sui daily login streak counter and Streak Fire badge: consecutive days, sa
   const parsed = parseSuiProfilePayload(wallet, serialized);
   assert.ok(parsed);
   assert.equal(parsed.loginStreak, 3);
+  assert.equal(parsed.checkInPoints, 400);
   assert.equal(parsed.lastLoginDate, '2026-11-22');
   assert.equal(hasStreakFireBadge(parsed), true);
-  assert.deepEqual(parsed.badges, ['first_shelter', 'streak_fire']);
+  assert.deepEqual(parsed.badges, ['first_shelter']);
 
-  // 5. Clock skew behind stored date does not reset or double-increment streak
+  // 5. Clock skew behind stored date does not reset or double-award points
   const clockSkew = applyDailyLoginToProfile(day3WithWin, '2026-11-21', '2026-11-21T23:00:00.000Z');
   assert.equal(clockSkew.loginStreak, 3);
+  assert.equal(clockSkew.checkInPoints, 400);
   assert.equal(clockSkew.lastLoginDate, '2026-11-22');
   assert.equal(hasStreakFireBadge(clockSkew), true);
 
-  // 6. Missing a full day (gap >= 2 days) resets streak to 1 and deactivates Streak Fire
+  // 6. Missing a full day (gap >= 2 days) resets streak to 1 and awards base points (+100) while preserving cumulative points
   const afterGap = applyDailyLoginToProfile(day3WithWin, '2026-11-24', '2026-11-24T09:00:00.000Z');
   assert.equal(afterGap.loginStreak, 1);
+  assert.equal(afterGap.checkInPoints, 500);
   assert.equal(afterGap.lastLoginDate, '2026-11-24');
   assert.equal(hasStreakFireBadge(afterGap), false);
-  assert.equal(afterGap.badges.includes('streak_fire'), false);
   assert.equal(afterGap.badges.includes('first_shelter'), true, 'Level badges remain earned after streak reset');
 
-  // 7. Merging two profile snapshots keeps the newer calendar date's streak
+  // 7. Merging two profile snapshots keeps newer calendar date streak & highest cumulative points
   const merged = mergeSuiProfiles(day2, day3WithWin);
   assert.equal(merged.loginStreak, 3);
+  assert.equal(merged.checkInPoints, 400);
   assert.equal(merged.lastLoginDate, '2026-11-22');
   assert.equal(hasStreakFireBadge(merged), true);
 
@@ -6830,10 +6984,532 @@ test('Sui daily login streak counter and Streak Fire badge: consecutive days, sa
   assert.equal(saveWalletSuiProfile(null, day3WithWin), false);
 });
 
+test('sculpted snow track surface material: creamy-white lit palette vs cool pale-blue groove shadows, seamless periodic relief, roughness contrast, and unit normals', () => {
+  const splitRgb = (hex: number) => ({
+    r: (hex >> 16) & 0xff,
+    g: (hex >> 8) & 0xff,
+    b: hex & 0xff,
+  });
 
+  // 1. Creamy-white lit snow (never clipped flat #ffffff) vs cool pale-blue shadows in grooves & banks
+  const lit = splitRgb(SNOW_SURFACE_PALETTE.creamyLitHex);
+  const groove = splitRgb(SNOW_SURFACE_PALETTE.grooveShadowHex);
+  const bank = splitRgb(SNOW_SURFACE_PALETTE.bankShadowHex);
 
+  assert.ok(
+    lit.r > lit.b && lit.r < 252 && lit.g >= 232 && lit.b >= 220,
+    `Lit snow must be warm creamy-white and never clipped flat white (got ${JSON.stringify(lit)})`,
+  );
+  assert.ok(
+    groove.b - groove.r >= 35,
+    `Groove shadow must be distinctly cool pale-blue (got ${JSON.stringify(groove)})`,
+  );
+  assert.ok(
+    bank.b - bank.r >= 45 && bank.r < groove.r,
+    `Bank shadow must be deeper cool alpine blue than mid grooves (got ${JSON.stringify(bank)})`,
+  );
 
+  // 2. Seamless periodic tiling across U=0/1 and V=0/1 boundaries (zero visible tile seams)
+  for (let i = 0; i < 16; i++) {
+    const t = i / 16;
+    const u0 = sampleSnowSurfaceField(0, t);
+    const u1 = sampleSnowSurfaceField(1, t);
+    assert.ok(Math.abs(u0.height - u1.height) < 1e-9, 'Snow heightfield must tile seamlessly in U');
+    assert.ok(Math.abs(u0.roughness - u1.roughness) < 1e-9, 'Snow roughness must tile seamlessly in U');
 
+    const v0 = sampleSnowSurfaceField(t, 0);
+    const v1 = sampleSnowSurfaceField(t, 1);
+    assert.ok(Math.abs(v0.height - v1.height) < 1e-9, 'Snow heightfield must tile seamlessly in V');
+    assert.ok(Math.abs(v0.grooveShadow - v1.grooveShadow) < 1e-9, 'Snow groove shadow must tile seamlessly in V');
+  }
 
+  // 3. Sculpted non-flat relief, groove/crest tonal dynamic range, roughness variation, and unit-length normals
+  let minH = 1;
+  let maxH = 0;
+  let minRough = 1;
+  let maxRough = 0;
+  let maxGroove = 0;
+  let maxCrest = 0;
+  let maxNormalTilt = 0;
 
+  for (let iy = 0; iy < 32; iy++) {
+    for (let ix = 0; ix < 32; ix++) {
+      const u = ix / 32;
+      const v = iy / 32;
+      const s = sampleSnowSurfaceField(u, v);
+      minH = Math.min(minH, s.height);
+      maxH = Math.max(maxH, s.height);
+      minRough = Math.min(minRough, s.roughness);
+      maxRough = Math.max(maxRough, s.roughness);
+      maxGroove = Math.max(maxGroove, s.grooveShadow);
+      maxCrest = Math.max(maxCrest, s.crestHighlight);
+
+      assert.ok(
+        s.roughness >= SNOW_SURFACE_CONFIG.roughnessMin - 1e-9 &&
+          s.roughness <= SNOW_SURFACE_CONFIG.roughnessMax + 1e-9,
+        'Roughness must stay strictly inside calibrated PBR range',
+      );
+
+      const n = evaluateSnowNormal(u, v);
+      const len = Math.hypot(n.nx, n.ny, n.nz);
+      assert.ok(Math.abs(len - 1) < 1e-6, 'Evaluated tangent-space snow normal must be unit length');
+      assert.ok(n.nz > 0.4, 'Snow normal must point outward (+Z tangent space)');
+      maxNormalTilt = Math.max(maxNormalTilt, Math.hypot(n.nx, n.ny));
+    }
+  }
+
+  assert.ok(maxH - minH >= 0.35, `Snow relief must be visibly sculpted, not flat (span=${(maxH - minH).toFixed(3)})`);
+  assert.ok(maxRough - minRough >= 0.2, `Compressed carves vs powdery snow must vary roughness (span=${(maxRough - minRough).toFixed(3)})`);
+  assert.ok(maxGroove >= 0.6 && maxCrest >= 0.55, 'Groove shadows and sunlit crests must both be clearly represented');
+  assert.ok(maxNormalTilt >= 0.12, `Surface normals must tilt meaningfully across grooves/ripples (maxTilt=${maxNormalTilt.toFixed(3)})`);
+});
+
+test('mobile/desktop performance budget, title-screen render pause, and fast-loading media budgets stay within bounds', () => {
+  const mobileBudget = computeDevicePerformanceBudget({
+    isSoftwareGl: false,
+    devicePixelRatio: 3,
+    viewportWidth: 390,
+    viewportHeight: 844,
+    hasCoarsePointer: true,
+    maxTouchPoints: 5,
+  });
+  assert.equal(mobileBudget.isMobileTier, true);
+  assert.equal(mobileBudget.pixelRatio, PERFORMANCE_BUDGET_CONFIG.mobileMaxPixelRatio);
+  assert.equal(mobileBudget.shadowMapSize, 512);
+  assert.equal(mobileBudget.maxAnisotropyCap, 4);
+
+  const desktopBudget = computeDevicePerformanceBudget({
+    isSoftwareGl: false,
+    devicePixelRatio: 2,
+    viewportWidth: 1440,
+    viewportHeight: 900,
+    hasCoarsePointer: false,
+    maxTouchPoints: 0,
+  });
+  assert.equal(desktopBudget.isMobileTier, false);
+  assert.equal(desktopBudget.pixelRatio, 2);
+  assert.equal(desktopBudget.shadowMapSize, 1024);
+
+  const swBudget = computeDevicePerformanceBudget({
+    isSoftwareGl: true,
+    devicePixelRatio: 2,
+    viewportWidth: 1280,
+    viewportHeight: 720,
+    hasCoarsePointer: false,
+    maxTouchPoints: 0,
+  });
+  assert.equal(swBudget.pixelRatio, 1);
+
+  assert.equal(shouldRenderContinuous3D('title'), false);
+  assert.equal(shouldRenderContinuous3D('playing'), true);
+  assert.equal(shouldRenderContinuous3D('victory'), true);
+  assert.equal(shouldRenderContinuous3D('gameover'), true);
+
+  // Verify lightweight fast-loading media assets on disk
+  const posterPath = path.resolve(process.cwd(), 'public/assets/aistudio/opening-poster.webp');
+  assert.equal(fs.existsSync(posterPath), true, 'Opening poster WebP must exist for instant first paint');
+  assert.ok(fs.statSync(posterPath).size < 100 * 1024, 'Opening poster WebP must stay under 100 KB');
+
+  const videoPath = path.resolve(process.cwd(), 'public/assets/aistudio/202611221927_31369b59.mp4');
+  assert.ok(fs.statSync(videoPath).size < 1800 * 1024, 'Opening MP4 must stay optimized under 1.8 MB');
+
+  for (const webPath of [
+    OUTCOME_ASSETS.victoryHero,
+    OUTCOME_ASSETS.defeatHero,
+    OUTCOME_ASSETS.smallYeti,
+  ]) {
+    const diskPath = path.resolve(process.cwd(), 'public', webPath.replace(/^\/+/, ''));
+    assert.ok(
+      fs.statSync(diskPath).size < 500 * 1024,
+      `${webPath} must stay optimized under 500 KB`,
+    );
+  }
+});
+
+test('Level 6+ escalated difficulty: Levels 1-5 remain strictly unchanged while Levels 6-10 ramp speed, avalanche pressure, density, and curvature', () => {
+  // Levels 1-5 must preserve exact original baseline values
+  const expectedLv1to5 = [
+    { lv: 1, baseSpeed: 25.4, avSpeed: 23.6, avDist: 28.0, density: 0.65, curve: 0.72 },
+    { lv: 2, baseSpeed: 25.8, avSpeed: 24.0, avDist: 28.0, density: 0.78, curve: 0.78 },
+    { lv: 3, baseSpeed: 26.2, avSpeed: 24.4, avDist: 28.0, density: 0.92, curve: 0.84 },
+    { lv: 4, baseSpeed: 26.6, avSpeed: 24.8, avDist: 28.0, density: 1.04, curve: 0.89 },
+    { lv: 5, baseSpeed: 27.0, avSpeed: 25.2, avDist: 28.0, density: 1.16, curve: 0.94 },
+  ];
+  for (const e of expectedLv1to5) {
+    const cfg = LEVEL_CONFIGS[e.lv - 1];
+    const diff = computeArenaDifficultyProfile(e.lv);
+    assert.equal(cfg.baseSpeed, e.baseSpeed, `Level ${e.lv} baseSpeed must remain unchanged`);
+    assert.equal(cfg.avalancheCruiseSpeed, e.avSpeed, `Level ${e.lv} avalancheCruiseSpeed must remain unchanged`);
+    assert.equal(cfg.avalancheStartDistance, e.avDist, `Level ${e.lv} avalancheStartDistance must remain unchanged`);
+    assert.equal(cfg.densityScale, e.density, `Level ${e.lv} densityScale must remain unchanged`);
+    assert.equal(diff.curveIntensityScale, e.curve, `Level ${e.lv} curveIntensityScale must remain unchanged`);
+  }
+
+  // Levels 6-10 must step up sharply from Level 5 and escalate strictly every level
+  const lv5 = LEVEL_CONFIGS[4];
+  const lv6 = LEVEL_CONFIGS[5];
+  assert.ok(
+    lv6.baseSpeed - lv5.baseSpeed >= 1.5,
+    `Level 6 speed jump above Level 5 should be significant (got ${(lv6.baseSpeed - lv5.baseSpeed).toFixed(2)} m/s)`,
+  );
+  assert.ok(
+    lv6.avalancheStartDistance < lv5.avalancheStartDistance - 1.5,
+    'Level 6+ avalanche must start closer than Levels 1-5',
+  );
+  assert.equal(computeArenaDifficultyProfile(6).difficultyLabel, 'Hard');
+  assert.equal(computeArenaDifficultyProfile(8).difficultyLabel, 'Expert');
+  assert.equal(computeArenaDifficultyProfile(10).difficultyLabel, 'Expert');
+
+  for (let lv = 6; lv <= 10; lv++) {
+    const prevCfg = LEVEL_CONFIGS[lv - 2];
+    const cfg = LEVEL_CONFIGS[lv - 1];
+    const prevDiff = computeArenaDifficultyProfile(lv - 1);
+    const diff = computeArenaDifficultyProfile(lv);
+    const prevMargin = prevCfg.baseSpeed - prevCfg.avalancheCruiseSpeed;
+    const currMargin = cfg.baseSpeed - cfg.avalancheCruiseSpeed;
+
+    assert.ok(cfg.baseSpeed >= prevCfg.baseSpeed + 1.2, `Level ${lv} baseSpeed must escalate sharply`);
+    assert.ok(currMargin < prevMargin, `Level ${lv} avalanche speed margin must tighten (${currMargin.toFixed(2)} vs ${prevMargin.toFixed(2)})`);
+    assert.ok(cfg.avalancheStartDistance < prevCfg.avalancheStartDistance, `Level ${lv} avalanche start distance must tighten`);
+    assert.ok(diff.densityScale > prevDiff.densityScale + 0.14, `Level ${lv} obstacle density must ramp strongly`);
+    assert.ok(diff.curveIntensityScale > prevDiff.curveIntensityScale + 0.03, `Level ${lv} curvature must ramp strongly`);
+    assert.ok(diff.corridorHalfWidthBase * 2 >= 4.5, `Level ${lv} must keep passable >= 4.5m safe corridor`);
+  }
+});
+
+test('Sui Player Hub: Avatar Picker, Username sanitization, wallet-gated Daily Check-In status, 3-state claimable badges (locked/ready/claimed), and v1 backward compatibility', () => {
+  const wallet = '0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234569f0e';
+
+  // 1. Default network label & 4-avatar Lofi Avatar Picker allowlist + on-disk assets
+  assert.equal(getActiveSuiNetworkLabel(), 'Sui Testnet');
+  assert.equal(SUI_AVATAR_OPTIONS.length, 4);
+  assert.deepEqual(
+    SUI_AVATAR_OPTIONS.map((a) => a.label),
+    ['Lofi Goggles', 'Lofi Beanie', 'Lofi Shades', 'Lofi Headphones'],
+  );
+  assert.equal(isValidAvatarId('lofi_goggles'), true);
+  assert.equal(isValidAvatarId('lofi_beanie'), true);
+  assert.equal(isValidAvatarId('lofi_shades'), true);
+  assert.equal(isValidAvatarId('lofi_headphones'), true);
+  assert.equal(isValidAvatarId('unknown_avatar'), false);
+  for (const avatar of SUI_AVATAR_OPTIONS) {
+    const diskPath = path.resolve(process.cwd(), 'public', avatar.imageSrc.replace(/^\/+/, ''));
+    assert.equal(fs.existsSync(diskPath), true, `Avatar asset ${avatar.imageSrc} must exist on disk`);
+  }
+
+  // 2. Username sanitization (strips control chars, trims, enforces MAX_USERNAME_LENGTH)
+  assert.equal(sanitizeRiderUsername('  Lofi\tRider\n01  '), 'Lofi Rider 01');
+  assert.equal(sanitizeRiderUsername('A'.repeat(40)).length, MAX_USERNAME_LENGTH);
+
+  let profile = createEmptySuiProfile(wallet, '2026-11-23T09:00:00.000Z');
+  assert.equal(profile.avatarId, DEFAULT_SUI_AVATAR_ID);
+  assert.equal(profile.username, '');
+  assert.equal(profile.usernameLocked, false);
+  assert.deepEqual(profile.claimedBadges, []);
+  assert.equal(hasCheckedInToday(profile, '2026-11-23'), false, 'Fresh wallet must be Ready to Check In');
+
+  // Empty username cannot be locked and does not unlock New User Verified
+  assert.equal(getBadgeClaimState(profile, 'new_user_verified'), 'locked');
+  const emptyLockAttempt = lockProfileUsername(profile, '   ');
+  assert.equal(emptyLockAttempt.usernameLocked, false);
+  assert.equal(emptyLockAttempt.username, '');
+  assert.equal(getBadgeClaimState(emptyLockAttempt, 'new_user_verified'), 'locked');
+
+  // Lock username after wallet signature -> unlocks New User Verified as 'ready' (still blurred until claimed!)
+  profile = lockProfileUsername(profile, '  AlpineWolf  ', '2026-11-23T09:01:00.000Z');
+  assert.equal(profile.username, 'AlpineWolf');
+  assert.equal(profile.usernameLocked, true);
+  assert.equal(getBadgeClaimState(profile, 'new_user_verified'), 'ready');
+
+  const overwriteAttempt = lockProfileUsername(profile, 'OtherRider', '2026-11-23T09:01:10.000Z');
+  assert.equal(overwriteAttempt.username, 'AlpineWolf', 'Locked username must never be overwritten');
+  assert.equal(overwriteAttempt.usernameLocked, true);
+
+  profile = updateProfileIdentity(
+    profile,
+    { avatarId: 'lofi_beanie', username: 'AttemptedChange' },
+    '2026-11-23T09:01:20.000Z',
+  );
+  assert.equal(profile.avatarId, 'lofi_beanie', 'Avatar must stay selectable after username lock');
+  assert.equal(profile.username, 'AlpineWolf', 'updateProfileIdentity must not change locked username');
+  assert.equal(profile.usernameLocked, true);
+
+  // 3. Daily Check-In status transitions & awards points only after explicit applyDailyLoginToProfile
+  assert.equal(hasCheckedInToday(profile, '2026-11-23'), false);
+  profile = applyDailyLoginToProfile(profile, '2026-11-23', '2026-11-23T09:02:00.000Z');
+  assert.equal(profile.loginStreak, 1);
+  assert.equal(profile.checkInPoints, 100);
+  assert.equal(hasCheckedInToday(profile, '2026-11-23'), true, 'Must show Checked In Today after check-in');
+  assert.equal(hasCheckedInToday(profile, '2026-11-24'), false, 'Must be Ready to Check In on the next day');
+
+  // 4. 3-state claimable badges: locked -> ready -> claimed
+  assert.equal(getBadgeClaimState(profile, 'first_shelter'), 'locked');
+  assert.equal(getBadgeClaimState(profile, 'summit_champion'), 'locked');
+
+  // Attempting to claim a locked badge must be a no-op
+  const lockedClaimAttempt = claimBadgeInProfile(profile, 'first_shelter');
+  assert.deepEqual(lockedClaimAttempt.claimedBadges, []);
+  assert.equal(getBadgeClaimState(lockedClaimAttempt, 'first_shelter'), 'locked');
+
+  // Completing Level 1 transitions First Shelter to 'ready' (still blurred until wallet claim!)
+  profile = applyLevelCompletionToProfile(profile, 1, '2026-11-23T09:05:00.000Z');
+  assert.equal(getBadgeClaimState(profile, 'first_shelter'), 'ready');
+  assert.equal(getBadgeClaimState(profile, 'growing_crew'), 'locked');
+  assert.deepEqual(profile.claimedBadges, []);
+  assert.deepEqual(
+    getClaimedBadgeDefinitions(profile).map((b) => b.id),
+    [],
+    'My Badges must remain empty before any badge is claimed',
+  );
+  assert.deepEqual(
+    getReadyBadgeDefinitions(profile).map((b) => b.id),
+    ['new_user_verified', 'first_shelter'],
+    'Ready-to-claim selector must list unlocked unclaimed badges in canonical order',
+  );
+
+  // Claiming after wallet signature transitions First Shelter to 'claimed' (crisp, unblurred!)
+  profile = claimBadgeInProfile(profile, 'first_shelter', '2026-11-23T09:06:00.000Z');
+  assert.equal(getBadgeClaimState(profile, 'first_shelter'), 'claimed');
+  assert.deepEqual(profile.claimedBadges, ['first_shelter']);
+  assert.deepEqual(
+    getClaimedBadgeDefinitions(profile).map((b) => b.id),
+    ['first_shelter'],
+    'My Badges must list strictly claimed badges',
+  );
+  assert.deepEqual(
+    getReadyBadgeDefinitions(profile).map((b) => b.id),
+    ['new_user_verified'],
+  );
+
+  // Claiming again is idempotent
+  const claimAgain = claimBadgeInProfile(profile, 'first_shelter');
+  assert.deepEqual(claimAgain.claimedBadges, ['first_shelter']);
+
+  // 5. Full round-trip serialization & merge preserve username, avatarId, points, and all 7 claimedBadges under byte cap (no .png paths in Sui payload)
+  let maxed = applyLevelCompletionToProfile(profile, 10, '2026-11-24T09:00:00.000Z');
+  maxed = applyDailyLoginToProfile(maxed, '2026-11-24', '2026-11-24T09:01:00.000Z');
+  assert.equal(maxed.loginStreak, 2);
+  assert.equal(maxed.checkInPoints, 250);
+  for (const def of SUI_BADGE_DEFINITIONS) {
+    maxed = claimBadgeInProfile(maxed, def.id, '2026-11-24T09:02:00.000Z');
+  }
+  maxed = updateProfileIdentity(
+    maxed,
+    { avatarId: 'lofi_headphones', username: 'SnowboardSummitRider' },
+    '2026-11-24T09:03:00.000Z',
+  );
+  const serialized = serializeSuiProfilePayload(maxed);
+  assert.equal(serialized.includes('.png'), false, 'Avatar/badge image URLs must never be serialized into Sui payload');
+  assert.ok(
+    serialized.length <= MAX_PROFILE_PAYLOAD_BYTES,
+    `Maxed hub payload must stay within ${MAX_PROFILE_PAYLOAD_BYTES} bytes (got ${serialized.length})`,
+  );
+  const parsed = parseSuiProfilePayload(wallet, serialized);
+  assert.ok(parsed);
+  assert.equal(parsed.avatarId, 'lofi_headphones');
+  assert.equal(parsed.username, 'AlpineWolf', 'Locked username must persist through serialization');
+  assert.equal(parsed.usernameLocked, true);
+  assert.equal(parsed.checkInPoints, 250);
+  assert.equal(parsed.claimedBadges.length, 7);
+  for (const def of SUI_BADGE_DEFINITIONS) {
+    assert.equal(getBadgeClaimState(parsed, def.id), 'claimed');
+  }
+
+  // Merge combines claimedBadges union, keeps locked username immutable even against newer unlocked snapshot
+  const unlockedNewer = updateProfileIdentity(
+    createEmptySuiProfile(wallet, '2026-11-25T09:00:00.000Z'),
+    { username: 'UnlockedSpoof', avatarId: 'lofi_shades' },
+    '2026-11-25T09:00:00.000Z',
+  );
+  const merged = mergeSuiProfiles(unlockedNewer, parsed);
+  assert.equal(merged.avatarId, 'lofi_shades');
+  assert.equal(merged.username, 'AlpineWolf', 'Locked username must win over any unlocked snapshot');
+  assert.equal(merged.usernameLocked, true);
+  assert.equal(merged.checkInPoints, 250);
+  assert.equal(merged.claimedBadges.length, 7);
+
+  // 6. Backward-compatible parsing of legacy v1 badge IDs (strips legacy streak_fire) & earlier avatar IDs
+  const legacyParsed = parseSuiProfilePayload(
+    wallet,
+    JSON.stringify({
+      v: 1,
+      avatarId: 'summit_explorer',
+      highestCompletedLevel: 5,
+      lilYetisRecruited: 5,
+      loginStreak: 2,
+      lastLoginDate: '2026-11-22',
+      badges: ['first_shelter', 'steep_survivor', 'alpine_carver', 'streak_fire'],
+      updatedAt: '2026-11-22T12:00:00.000Z',
+    }),
+  );
+  assert.ok(legacyParsed);
+  assert.equal(legacyParsed.avatarId, 'lofi_shades');
+  assert.equal(legacyParsed.username, '');
+  assert.equal(legacyParsed.checkInPoints, 0);
+  assert.deepEqual(legacyParsed.badges, [
+    'first_shelter',
+    'growing_crew',
+    'carving_master',
+    'airborne_yeti',
+  ]);
+  assert.deepEqual(legacyParsed.claimedBadges, []);
+});
+
+test('Overhead LOFI THE YETI arena banner: high jump & camera clearance, snowbank pole margins, zero ramp overlap across Levels 1-10, and pinned cloth wind flutter', () => {
+  // 1. Verify Start & Mid-Track gates across ALL 10 levels
+  for (let lv = 1; lv <= 10; lv++) {
+    const sim = createInitialSimulationState('playing', undefined, lv);
+    const placements = computeArenaBannerPlacements(lv, sim.levelLength, sim.ramps);
+    assert.equal(placements.length, 2, `Level ${lv} must place Start Gate and Mid-Track Gate`);
+    assert.equal(placements[0].id, 'start_gate');
+    assert.equal(placements[1].id, 'mid_gate');
+
+    for (const gate of placements) {
+      // High overhead clearance strictly above Lofi max manual jump head height (4.7m) and chase camera (5.05m)
+      assert.ok(
+        gate.bottomClearance >= 6.5 && gate.bottomClearance > ARENA_BANNER_CONFIG.maxManualJumpHeadHeight + 1.5,
+        `Level ${lv} ${gate.id} clearance must exceed jump & camera height (got ${gate.bottomClearance}m)`,
+      );
+      // Side poles must sit strictly outside the playable snow track edge
+      assert.ok(
+        gate.poleHalfSpan >= gate.halfWidth + 1.2,
+        `Level ${lv} ${gate.id} poles must sit outside track halfWidth (${gate.poleHalfSpan} vs ${gate.halfWidth})`,
+      );
+      // Never overlaps any ramp launch or landing arc
+      assert.equal(
+        isDistanceInsideRampExclusion(gate.z, sim.ramps),
+        false,
+        `Level ${lv} ${gate.id} at z=${gate.z} must not overlap any ramp arc`,
+      );
+      assert.ok(gate.bannerSpan >= 18, `Banner span should cleanly bridge the track (got ${gate.bannerSpan}m)`);
+    }
+  }
+
+  // 2. Cloth kinematics: corners strictly pinned (zero flutter), gentle catenary sag at center, bounded breeze wave
+  const leftCorner = evaluateBannerClothVertex(0, 1, 26, 2.75, 4.2, 2.5);
+  const rightCorner = evaluateBannerClothVertex(1, 0, 26, 2.75, 4.2, 2.5);
+  assert.ok(Math.abs(leftCorner.z) < 1e-6, 'Left cloth edge must remain pinned to rope grommet');
+  assert.ok(Math.abs(rightCorner.z) < 1e-6, 'Right cloth edge must remain pinned to rope grommet');
+
+  const centerTop = evaluateBannerClothVertex(0.5, 1, 26, 2.75, 0, 0);
+  const centerBot = evaluateBannerClothVertex(0.5, 0, 26, 2.75, 0, 0);
+  assert.ok(centerTop.y < 2.75 * 0.5 - 0.15, 'Top center edge should drape in a subtle catenary curve');
+  assert.ok(centerBot.y < -2.75 * 0.5 - 0.2, 'Bottom center edge should drape cleanly in a catenary curve');
+
+  let maxAbsZ = 0;
+  for (let t = 0; t < 4; t += 0.2) {
+    const sample = evaluateBannerClothVertex(0.5, 0.2, 26, 2.75, t, 1.8);
+    maxAbsZ = Math.max(maxAbsZ, Math.abs(sample.z));
+  }
+  assert.ok(maxAbsZ > 0.05 && maxAbsZ < 0.55, `Cloth wind flutter should be subtle & visible (maxZ=${maxAbsZ.toFixed(3)}m)`);
+});
+
+test('Sui Leaderboard: ranking priority (level -> total points -> badges), Top 10 cap, seed fallback, username/address fallback, and Demo Mode isolation', () => {
+  // 1. Demo Mode with zero saved profiles still displays populated Top 10 via clean seed riders and highlights nobody
+  const demoBoard = buildSuiLeaderboard([], null, null);
+  assert.equal(demoBoard.includesSeedRiders, true);
+  assert.equal(demoBoard.realProfileCount, 0);
+  assert.equal(demoBoard.topEntries.length, SEED_LEADERBOARD_RIDERS.length);
+  assert.equal(demoBoard.currentPlayerEntry, null);
+  assert.equal(
+    demoBoard.topEntries.every((e) => !e.isCurrentPlayer && e.isSeed),
+    true,
+    'Demo Mode must never submit or highlight a Demo Mode entry',
+  );
+
+  // 2. Strict ranking priority: Highest Level -> Total Points (levels + check-ins) -> Badges Claimed (X/7)
+  const makeAddr = (suffix: number) =>
+    `0x${String(suffix).padStart(64, 'a')}`;
+
+  let pTop = createEmptySuiProfile(makeAddr(1));
+  pTop = applyLevelCompletionToProfile(pTop, 10);
+  pTop = lockProfileUsername(pTop, 'SummitAce');
+  pTop = applyDailyLoginToProfile(pTop, '2026-11-22');
+  pTop = claimBadgeInProfile(pTop, 'first_shelter');
+  pTop = claimBadgeInProfile(pTop, 'summit_champion');
+
+  // Same level (6), higher check-in points beats lower check-in points
+  let pMidHighPts = createEmptySuiProfile(makeAddr(2));
+  pMidHighPts = applyLevelCompletionToProfile(pMidHighPts, 6);
+  pMidHighPts = applyDailyLoginToProfile(pMidHighPts, '2026-11-21');
+  pMidHighPts = applyDailyLoginToProfile(pMidHighPts, '2026-11-22'); // 100 + 150 = 250 pts
+
+  let pMidLowPts = createEmptySuiProfile(makeAddr(3));
+  pMidLowPts = applyLevelCompletionToProfile(pMidLowPts, 6);
+  pMidLowPts = applyDailyLoginToProfile(pMidLowPts, '2026-11-22'); // 100 pts
+
+  // Same level (6) AND same points (100), more claimed badges wins!
+  let pMidMoreBadges = createEmptySuiProfile(makeAddr(4));
+  pMidMoreBadges = applyLevelCompletionToProfile(pMidMoreBadges, 6);
+  pMidMoreBadges = applyDailyLoginToProfile(pMidMoreBadges, '2026-11-22'); // 100 pts
+  pMidMoreBadges = claimBadgeInProfile(pMidMoreBadges, 'first_shelter');
+  pMidMoreBadges = claimBadgeInProfile(pMidMoreBadges, 'slalom_pro');
+
+  let pLow = createEmptySuiProfile(makeAddr(5));
+  pLow = applyLevelCompletionToProfile(pLow, 2);
+
+  // 5 real profiles => no seed riders needed
+  const fiveReal = [pLow, pMidLowPts, pTop, pMidMoreBadges, pMidHighPts];
+  assert.equal(fiveReal.length, LEADERBOARD_MIN_REAL_PROFILES_FOR_NO_SEEDS);
+  const rankedFive = buildSuiLeaderboard(fiveReal, pMidMoreBadges.walletAddress, pMidMoreBadges);
+  assert.equal(rankedFive.includesSeedRiders, false, 'Seed riders must be omitted when >= 5 real profiles exist');
+  assert.equal(rankedFive.topEntries.length, 5);
+
+  assert.deepEqual(
+    rankedFive.topEntries.map((e) => e.walletAddress),
+    [
+      pTop.walletAddress,
+      pMidHighPts.walletAddress,
+      pMidMoreBadges.walletAddress,
+      pMidLowPts.walletAddress,
+      pLow.walletAddress,
+    ],
+    'Ranking must strictly follow Level -> Total Points -> Claimed Badges',
+  );
+
+  // Verify points calculation (level * 500 + checkInPoints)
+  assert.equal(
+    computeLeaderboardTotalPoints(pTop),
+    10 * LEADERBOARD_POINTS_PER_LEVEL + 100,
+  );
+  assert.equal(rankedFive.topEntries[0].displayName, 'SummitAce');
+  assert.equal(rankedFive.topEntries[0].hasCustomUsername, true);
+  assert.equal(rankedFive.topEntries[0].claimedBadgesCount, 2);
+  assert.equal(rankedFive.topEntries[0].totalBadgesCount, 7);
+
+  // Fallback to shortened Sui address when rider has no username
+  assert.equal(rankedFive.topEntries[1].hasCustomUsername, false);
+  assert.equal(rankedFive.topEntries[1].displayName, shortenSuiAddress(pMidHighPts.walletAddress));
+
+  // Connected player row highlighted ("You")
+  assert.equal(rankedFive.topEntries[2].isCurrentPlayer, true);
+  assert.equal(rankedFive.currentPlayerEntry?.rank, 3);
+
+  // 3. Updating connected player (completing a higher level / checking in / claiming badge) automatically updates rank
+  let pUpdated = applyLevelCompletionToProfile(pMidMoreBadges, 10);
+  pUpdated = applyDailyLoginToProfile(pUpdated, '2026-11-23'); // 100 + 150 = 250 pts -> beats pTop's 100 check-in pts!
+  const afterUpdate = buildSuiLeaderboard(fiveReal, pUpdated.walletAddress, pUpdated);
+  assert.equal(afterUpdate.topEntries[0].walletAddress, pUpdated.walletAddress);
+  assert.equal(afterUpdate.topEntries[0].isCurrentPlayer, true);
+  assert.equal(afterUpdate.currentPlayerEntry?.rank, 1);
+
+  // 4. Top 10 cap when > 10 real profiles exist, while still reporting currentPlayerEntry rank #12
+  const twelveProfiles = Array.from({ length: 12 }, (_, idx) => {
+    let p = createEmptySuiProfile(makeAddr(10 + idx));
+    const lv = Math.min(10, Math.max(1, 10 - Math.floor(idx / 2)));
+    p = applyLevelCompletionToProfile(p, lv);
+    if (idx === 11) {
+      // Make #12 strictly lowest (Lv 0, 0 pts)
+      p = createEmptySuiProfile(makeAddr(99));
+    }
+    return p;
+  });
+  const capped = buildSuiLeaderboard(
+    twelveProfiles,
+    twelveProfiles[11].walletAddress,
+    twelveProfiles[11],
+  );
+  assert.equal(capped.topEntries.length, LEADERBOARD_MAX_ENTRIES);
+  assert.equal(capped.currentPlayerEntry?.rank, 12);
+});
 

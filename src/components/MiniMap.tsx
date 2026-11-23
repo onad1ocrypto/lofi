@@ -47,7 +47,7 @@ export function MiniMap({ miniMap, avalancheDanger }: MiniMapProps) {
     <aside
       aria-label={formatMiniMapAriaLabel(layout.levelNumber, layout.difficultyLabel)}
       data-testid="hud-minimap"
-      className="pointer-events-none select-none flex flex-col rounded-lg sm:rounded-xl border border-white/16 bg-[#0a1428]/18 backdrop-blur-[6px] shadow-[0_2px_10px_rgba(8,14,32,0.10)] overflow-hidden w-[66px] sm:w-[90px]"
+      className="pointer-events-none select-none flex flex-col rounded-lg sm:rounded-xl border border-white/18 bg-[#0a1428]/32 shadow-[0_2px_10px_rgba(8,14,32,0.14)] overflow-hidden w-[66px] sm:w-[90px]"
     >
       {/* Compact Header */}
       <div className="flex items-center justify-between gap-1 px-1.5 py-0.5 sm:px-2 sm:py-1 border-b border-white/10 bg-[#081124]/16">

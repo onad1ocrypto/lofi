@@ -26,6 +26,10 @@ import { createLofiCharacter } from './lofiCharacter';
 import { buildMiniMapLayout, buildMiniMapSnapshot } from './miniMapLogic';
 import { buildLevelObstacles } from './obstacleSpawner';
 import {
+  computeDevicePerformanceBudget,
+  shouldRenderContinuous3D,
+} from './performanceBudget';
+import {
   computeArrivalCoastMeters,
   createShelterArrivalState,
   resetShelterArrival,
@@ -279,6 +283,21 @@ export function createGameEngine(
   let bestTime = loadBestTime();
 
   // --- 1. Three.js Renderer, Scene & Lighting Rig ---
+  const initialWidth = Math.max(1, container.clientWidth || window.innerWidth);
+  const initialHeight = Math.max(1, container.clientHeight || window.innerHeight);
+  const readPerformanceBudget = (w: number, h: number) =>
+    computeDevicePerformanceBudget({
+      isSoftwareGl,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      viewportWidth: w,
+      viewportHeight: h,
+      hasCoarsePointer:
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(pointer: coarse)').matches,
+      maxTouchPoints: typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0,
+    });
+  const perfBudget = readPerformanceBudget(initialWidth, initialHeight);
+
   const renderer = new THREE.WebGLRenderer({
     antialias: !isSoftwareGl,
     powerPreference: 'high-performance',
@@ -286,12 +305,9 @@ export function createGameEngine(
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = DAYLIGHT_RIG.toneMappingExposure;
-  renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(perfBudget.pixelRatio);
   renderer.shadowMap.enabled = !isSoftwareGl;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-
-  const initialWidth = Math.max(1, container.clientWidth || window.innerWidth);
-  const initialHeight = Math.max(1, container.clientHeight || window.innerHeight);
   renderer.setSize(initialWidth, initialHeight);
   renderer.domElement.style.display = 'block';
   renderer.domElement.style.width = '100%';
@@ -324,7 +340,7 @@ export function createGameEngine(
     DAYLIGHT_RIG.keyIntensity,
   );
   keyLight.castShadow = !isSoftwareGl;
-  keyLight.shadow.mapSize.set(1024, 1024);
+  keyLight.shadow.mapSize.set(perfBudget.shadowMapSize, perfBudget.shadowMapSize);
   keyLight.shadow.camera.near = 2;
   keyLight.shadow.camera.far = 95;
   const shadowExtent = 26;
@@ -353,7 +369,10 @@ export function createGameEngine(
   const cameraRig = createCameraRig(camera);
 
   // --- 2. Build Characters & Real-Time 3D Alpine World ---
-  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  const maxAniso = Math.min(
+    renderer.capabilities.getMaxAnisotropy(),
+    perfBudget.maxAnisotropyCap,
+  );
   const lofi = createLofiCharacter(maxAniso);
   scene.add(lofi.root);
 
@@ -415,8 +434,16 @@ export function createGameEngine(
     );
   };
 
-  if (!isSoftwareGl) {
+  let disposed = false;
+  let compileTimerId = 0;
+  let shadersCompiled = false;
+  const compileShadersOnce = () => {
+    if (shadersCompiled || isSoftwareGl || disposed) return;
+    shadersCompiled = true;
     renderer.compile(scene, camera);
+  };
+  if (!isSoftwareGl && sim.phase !== 'title') {
+    compileShadersOnce();
   }
 
   // --- 3. Helper: Sync Characters, Small Yetis, Key Light & Camera ---
@@ -618,6 +645,7 @@ export function createGameEngine(
     const activeWindGustIntensity = sim.phase === 'playing' ? sim.windGust.intensity : 0;
     const activeWindGustForce = sim.phase === 'playing' ? sim.windGust.signedForce : 0;
     computeWindGustParticlePush(activeWindGustForce, gustParticlePush);
+    world.updateBanners(animTime, activeWindGustForce);
 
     cameraRig.update({
       dt,
@@ -940,7 +968,10 @@ export function createGameEngine(
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(readPerformanceBudget(w, h).pixelRatio);
+    if (!disposed) {
+      renderer.render(scene, camera);
+    }
   };
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown);
@@ -1057,6 +1088,7 @@ export function createGameEngine(
     syncVisualTransforms(0.016, animClock, true);
     audio.syncBackgroundMusic(sim.phase, sim.levelNumber, 0);
     emitHudNow();
+    ensureRenderLoopRunning();
   };
 
   const pauseGame = () => {
@@ -1096,6 +1128,7 @@ export function createGameEngine(
     syncVisualTransforms(0.016, animClock, true);
     audio.syncBackgroundMusic(sim.phase, sim.levelNumber, 0);
     emitHudNow();
+    ensureRenderLoopRunning();
   };
 
   /**
@@ -1122,6 +1155,7 @@ export function createGameEngine(
     syncVisualTransforms(0.016, animClock, true);
     audio.syncBackgroundMusic(sim.phase, sim.levelNumber, 0);
     emitHudNow();
+    ensureRenderLoopRunning();
   };
 
   /** Start a fresh game from Level 1 with Lofi alone (0 followers). */
@@ -1142,6 +1176,9 @@ export function createGameEngine(
     syncVisualTransforms(0.016, animClock, true);
     audio.syncBackgroundMusic(sim.phase, sim.levelNumber, 0);
     emitHudNow();
+    if (!disposed) {
+      renderer.render(scene, camera);
+    }
   };
 
   const triggerJump = () => {
@@ -1193,13 +1230,27 @@ export function createGameEngine(
   syncVisualTransforms(0.016, 0, true);
   emitHudNow();
 
-  // --- 6. Frame Loop (with Software-WebGL afterDraw Pacing) ---
-  let disposed = false;
+  // --- 6. Frame Loop (with Software-WebGL afterDraw Pacing & Title-Screen Idle Pause) ---
+  let loopActive = false;
   let rafId = 0;
   let timerId = 0;
   let lastFrameMs = performance.now();
   let animClock = 0;
   let prevCarveIntensity = 0;
+
+  function ensureRenderLoopRunning() {
+    if (disposed || loopActive) return;
+    if (!shouldRenderContinuous3D(sim.phase)) return;
+    compileShadersOnce();
+    loopActive = true;
+    lastFrameMs = performance.now();
+    if (isSoftwareGl) {
+      renderer.render(scene, camera);
+      afterDraw(tick);
+    } else {
+      rafId = requestAnimationFrame(tick);
+    }
+  }
 
   function afterDraw(cb: () => void) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -1435,6 +1486,12 @@ export function createGameEngine(
 
     renderer.render(scene, camera);
 
+    // Pause continuous 3D rendering while full-screen opaque title video covers the canvas
+    if (!shouldRenderContinuous3D(sim.phase)) {
+      loopActive = false;
+      return;
+    }
+
     if (isSoftwareGl) {
       afterDraw(tick);
     } else {
@@ -1442,11 +1499,15 @@ export function createGameEngine(
     }
   }
 
-  if (isSoftwareGl) {
-    renderer.render(scene, camera);
-    afterDraw(tick);
+  if (shouldRenderContinuous3D(sim.phase)) {
+    ensureRenderLoopRunning();
   } else {
-    rafId = requestAnimationFrame(tick);
+    // On Title screen: defer shader pre-warm & 1 warm-up frame briefly so opening poster/video paints immediately
+    compileTimerId = window.setTimeout(() => {
+      if (disposed || shouldRenderContinuous3D(sim.phase)) return;
+      compileShadersOnce();
+      renderer.render(scene, camera);
+    }, 180);
   }
 
   return {
@@ -1466,8 +1527,10 @@ export function createGameEngine(
     getPhase: () => sim.phase,
     dispose() {
       disposed = true;
+      loopActive = false;
       cancelAnimationFrame(rafId);
       clearTimeout(timerId);
+      clearTimeout(compileTimerId);
       resizeObserver?.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('lostpointercapture', onLostPointerCapture);

@@ -12,15 +12,19 @@
  */
 
 import {
+  DEFAULT_SUI_AVATAR_ID,
   applyDailyLoginToProfile,
   buildSuiProfileStorageKey,
+  clampCheckInPoints,
   clampLoginStreak,
   createEmptySuiProfile,
   deriveBadgesForProgress,
   isAllowedSuiRpcUrl,
+  isValidAvatarId,
   mergeSuiProfiles,
   normalizeSuiAddress,
   parseSuiProfilePayload,
+  sanitizeRiderUsername,
   sanitizeWalletIconUrl,
   serializeSuiProfilePayload,
   toCalendarDateKey,
@@ -306,6 +310,14 @@ function getConfiguredSuiRpcUrl(): string {
   return DEFAULT_SUI_RPC_URL;
 }
 
+/** Returns the active Sui network badge label (defaults to "Sui Testnet"). */
+export function getActiveSuiNetworkLabel(): string {
+  const rpcUrl = getConfiguredSuiRpcUrl().toLowerCase();
+  if (rpcUrl.includes('mainnet')) return 'Sui Mainnet';
+  if (rpcUrl.includes('devnet')) return 'Sui Devnet';
+  return 'Sui Testnet';
+}
+
 function getConfiguredProfilePackageId(): string | null {
   const raw =
     typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUI_PROFILE_PACKAGE_ID
@@ -369,6 +381,7 @@ async function fetchOnChainSuiProfile(
     const highestCompletedLevel = Number(fields.highest_completed_level ?? 0);
     const lilYetisRecruited = Number(fields.lil_yetis_recruited ?? 0);
     const loginStreak = clampLoginStreak(Number(fields.login_streak ?? 0));
+    const checkInPoints = clampCheckInPoints(Number(fields.check_in_points ?? 0));
     const lastLoginDate =
       typeof fields.last_login_date === 'string'
         ? toCalendarDateKey(fields.last_login_date)
@@ -376,9 +389,23 @@ async function fetchOnChainSuiProfile(
     const rawBadges = Array.isArray(fields.badges)
       ? fields.badges.filter((x): x is SuiBadgeId => typeof x === 'string')
       : [];
+    const rawClaimed = Array.isArray(fields.claimed_badges)
+      ? fields.claimed_badges.filter((x): x is SuiBadgeId => typeof x === 'string')
+      : [];
+    const parsedUsername = sanitizeRiderUsername(fields.username);
+    const derivedBadges = deriveBadgesForProgress(
+      highestCompletedLevel,
+      lilYetisRecruited,
+      rawBadges,
+      parsedUsername.length > 0,
+    );
+    const earnedSet = new Set<SuiBadgeId>(derivedBadges);
 
     return {
       walletAddress,
+      username: parsedUsername,
+      usernameLocked: Boolean(fields.username_locked && parsedUsername.length > 0),
+      avatarId: isValidAvatarId(fields.avatar_id) ? fields.avatar_id : DEFAULT_SUI_AVATAR_ID,
       highestCompletedLevel: Number.isFinite(highestCompletedLevel)
         ? Math.max(0, Math.min(10, Math.floor(highestCompletedLevel)))
         : 0,
@@ -387,12 +414,9 @@ async function fetchOnChainSuiProfile(
         : 0,
       loginStreak,
       lastLoginDate,
-      badges: deriveBadgesForProgress(
-        highestCompletedLevel,
-        lilYetisRecruited,
-        rawBadges,
-        loginStreak,
-      ),
+      checkInPoints,
+      badges: derivedBadges,
+      claimedBadges: rawClaimed.filter((id) => earnedSet.has(id)),
       updatedAt: new Date().toISOString(),
       syncSource: 'sui-rpc',
     };
@@ -480,6 +504,33 @@ export function saveWalletSuiProfile(
   }
 }
 
+const SUI_PROFILE_STORAGE_PREFIX = 'lofi_ice_escape_sui_profile_v1:';
+
+/**
+ * Reads all valid compact Sui wallet profiles stored in browser storage for
+ * ranking in the Sui Leaderboard. Never writes data and never reads Demo Mode runs.
+ */
+export function loadAllSavedWalletSuiProfiles(): SuiPlayerProfile[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+
+  const profiles: SuiPlayerProfile[] = [];
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key || !key.startsWith(SUI_PROFILE_STORAGE_PREFIX)) continue;
+      const rawAddress = key.slice(SUI_PROFILE_STORAGE_PREFIX.length);
+      const rawJson = window.localStorage.getItem(key);
+      const parsed = parseSuiProfilePayload(rawAddress, rawJson, 'wallet-storage');
+      if (parsed) {
+        profiles.push(parsed);
+      }
+    }
+  } catch {
+    return profiles;
+  }
+  return profiles;
+}
+
 /**
  * Requests a real Wallet Standard personal message signature from the
  * connected Sui wallet (e.g., Nightly, Slush, Backpack) to verify
@@ -517,13 +568,22 @@ export async function signSuiProfileAction(
     const payload = new TextEncoder().encode(
       `Lofi Ice Escape\nAction: ${actionLabel}\nWallet: ${session.address}\nTimestamp: ${new Date().toISOString()}`,
     );
-    await signFeature.signPersonalMessage({
+    const result = await signFeature.signPersonalMessage({
       message: payload,
       account: account as { address: string },
     });
+    if (!result || (typeof result.signature !== 'string' && typeof result.bytes !== 'string')) {
+      return {
+        ok: false,
+        message: 'Wallet did not return a valid signature.',
+      };
+    }
     return { ok: true, message: 'Verified with wallet signature!' };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Signature rejected.';
+    const msg =
+      err instanceof Error && err.message.trim().length > 0
+        ? err.message
+        : 'Signature request was rejected.';
     return { ok: false, message: msg };
   }
 }

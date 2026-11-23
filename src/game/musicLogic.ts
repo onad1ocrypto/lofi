@@ -30,7 +30,7 @@ export const SFX_TRACK_SRCS = {
   gameOver:
     '/assets/aistudio/freesound_community-negative_beeps-6008_1ac25b4a.mp3',
   collectible:
-    '/assets/aistudio/universfield-video-game-bonus-323603_d5dfb245.mp3',
+    '/assets/aistudio/freesound_gamestudio-bar-increase-cartoon-funny-jump-384919_f3db9b8f.mp3',
   finish:
     '/assets/aistudio/freesound_community-tada-fanfare-a-6313_5fa556d6.mp3',
 } as const;

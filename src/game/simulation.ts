@@ -61,11 +61,11 @@ export const SIM_CONFIG = {
   baseForwardSpeed: 25.4,
   /** Reference fallback speed after an obstacle hit on Level 1 (m/s). */
   hitSlowSpeed: 12.7,
-  /** Speed drop subtracted from the active level's baseSpeed on obstacle impact (keeps 3-hit rule identical across Levels 1-10). */
+  /** Speed drop subtracted from the active level's baseSpeed on obstacle impact. */
   hitSpeedDrop: 12.7,
   /** Rate at which forward speed recovers back to cruise speed (m/s^2). */
   speedRecoveryRate: 10.8,
-  /** Duration during which slowdown penalty feels heavier before full recovery (tuned for 3-hit tolerance). */
+  /** Duration during which slowdown penalty feels heavier before full recovery. */
   slowdownDuration: 0.72,
   /** Lateral acceleration when steering on snow (m/s^2). */
   lateralAccel: 46.0,
@@ -118,6 +118,30 @@ export const SIM_CONFIG = {
   /** Maximum simulation dt clamp to prevent tunneling on tab switches. */
   maxDt: 0.05,
 } as const;
+
+/**
+ * Progressive post-collision avalanche chase multiplier (Levels 1..10):
+ * - Level 1 starts at 1.00x (classic forgiving 3-hit consecutive crash tolerance).
+ * - Scales smoothly upward each level, stepping up harder from Level 6+ so the
+ *   avalanche surges significantly faster toward Lofi after an obstacle hit,
+ *   while keeping 1st hits survivable and allowing full recovery through clean riding.
+ */
+export function computeCrashAvalancheChaseMultiplier(levelNumber: number): number {
+  const lv = Math.max(1, Math.min(10, Math.floor(levelNumber)));
+  const TABLE = [
+    1.0,  // Lv 1: classic forgiving 3-hit consecutive tolerance
+    1.04, // Lv 2
+    1.08, // Lv 3
+    1.14, // Lv 4
+    1.20, // Lv 5
+    1.28, // Lv 6: Hard — avalanche surges noticeably faster on crash
+    1.34, // Lv 7: Hard
+    1.40, // Lv 8: Expert
+    1.46, // Lv 9: Expert
+    1.52, // Lv 10: Peak Summit — intense danger surge after 1st crash, still survivable
+  ] as const;
+  return TABLE[lv - 1];
+}
 
 export interface RampSurfaceSample {
   onRamp: boolean;
@@ -1331,15 +1355,24 @@ export function stepSimulation(
   // Advance active level followers smoothly along Lofi's historical curved trail (including sequential jumps & braking!)
   updateFollowersAlongPath(state, levelCfg);
 
-  // Update avalanche threat distance
+  // Update avalanche threat distance (Levels 6-10 cap max cushion closer; post-collision chase surges faster on higher levels)
   const avalancheSpeed =
     state.levelAvalancheCruiseSpeed +
     progressRatio * SIM_CONFIG.avalancheLateBonus;
   const speedDelta = state.forwardSpeed - avalancheSpeed;
-
-  const gapChangeRate = speedDelta > 0 ? speedDelta * 0.52 : speedDelta * 1.12;
-  state.avalancheDistance = Math.min(
+  const levelAvalancheMax = Math.min(
     SIM_CONFIG.avalancheMaxDistance,
+    levelCfg.avalancheStartDistance + 2.0,
+  );
+  const crashChaseMult =
+    speedDelta < 0 && (state.slowdownTimer > 0 || state.invulnTimer > 0)
+      ? computeCrashAvalancheChaseMultiplier(state.levelNumber)
+      : 1.0;
+
+  const gapChangeRate =
+    speedDelta > 0 ? speedDelta * 0.52 : speedDelta * 1.12 * crashChaseMult;
+  state.avalancheDistance = Math.min(
+    levelAvalancheMax,
     state.avalancheDistance + gapChangeRate * dt,
   );
 
