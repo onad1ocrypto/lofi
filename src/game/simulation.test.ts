@@ -148,6 +148,7 @@ import {
   SUI_BADGE_DEFINITIONS,
   applyDailyLoginToProfile,
   applyLevelCompletionToProfile,
+  applySignedHighScoreToProfile,
   buildSuiProfileStorageKey,
   claimBadgeInProfile,
   computeCalendarDayDelta,
@@ -161,6 +162,7 @@ import {
   hasCheckedInToday,
   hasStreakFireBadge,
   isAllowedSuiRpcUrl,
+  isNewHighScore,
   isValidAvatarId,
   isValidSuiAddress,
   lockProfileUsername,
@@ -7537,5 +7539,75 @@ test('Game Over resets run strictly back to Level 1 (solo Lofi, 0 followers, fre
     'Game Over button copy should communicate returning to Level 1',
   );
 });
+
+test('Wallet-signed High Score: monotonic preservation across Game Over, compact payload round-trip, and Sui Leaderboard points integration', () => {
+  const addrA = `0x${'1'.repeat(64)}`;
+  const addrB = `0x${'2'.repeat(64)}`;
+
+  // 1. Fresh profile starts with highScore = 0
+  let riderA = createEmptySuiProfile(addrA);
+  assert.equal(riderA.highScore, 0);
+  assert.equal(isNewHighScore(riderA, 0), false, 'Score of 0 must never trigger New High Score');
+  assert.equal(isNewHighScore(riderA, 450), true, 'First positive run score triggers New High Score');
+
+  // 2. Signing & saving updates highScore; lower later run NEVER lowers or erases previous highScore
+  riderA = applySignedHighScoreToProfile(riderA, 1250);
+  assert.equal(riderA.highScore, 1250);
+  assert.equal(isNewHighScore(riderA, 900), false, 'Lower score must not prompt New High Score');
+  assert.equal(isNewHighScore(riderA, 1250), false, 'Equal score must not prompt New High Score');
+  assert.equal(isNewHighScore(riderA, 1251), true, 'Strictly higher score triggers New High Score');
+
+  const afterLowerAttempt = applySignedHighScoreToProfile(riderA, 400);
+  assert.equal(afterLowerAttempt.highScore, 1250, 'Previous highest score must remain strictly preserved');
+
+  // 3. Compact payload serialization & merge preserve highScore and handle legacy payloads cleanly
+  const serialized = serializeSuiProfilePayload(riderA);
+  const parsed = parseSuiProfilePayload(addrA, serialized);
+  assert.ok(parsed, 'Serialized payload with highScore must parse cleanly');
+  assert.equal(parsed.highScore, 1250);
+
+  const legacyWithoutHighScore = parseSuiProfilePayload(
+    addrA,
+    JSON.stringify({
+      v: 2,
+      highestLevel: 3,
+      lilYetis: 3,
+      loginStreak: 1,
+      lastLoginDate: '2026-11-22',
+      badges: ['first_shelter'],
+    }),
+  );
+  assert.ok(legacyWithoutHighScore, 'Legacy payload without highScore must still parse cleanly');
+  assert.equal(legacyWithoutHighScore.highScore, 0, 'Legacy payload without highScore defaults cleanly to 0');
+
+  const merged = mergeSuiProfiles(legacyWithoutHighScore, riderA);
+  assert.equal(merged.highScore, 1250, 'Merging profiles must keep the highest saved score');
+
+  // 4. Sui Leaderboard displays signed highScore and includes it in totalPoints tie-breaker
+  let riderSameLevelLowerScore = createEmptySuiProfile(addrB);
+  riderSameLevelLowerScore = applyLevelCompletionToProfile(riderSameLevelLowerScore, 4);
+  riderSameLevelLowerScore = applySignedHighScoreToProfile(riderSameLevelLowerScore, 600);
+
+  riderA = applyLevelCompletionToProfile(riderA, 4);
+  assert.equal(
+    computeLeaderboardTotalPoints(riderA),
+    4 * LEADERBOARD_POINTS_PER_LEVEL + 1250,
+  );
+  const board = buildSuiLeaderboard(
+    [riderSameLevelLowerScore, riderA],
+    riderA.walletAddress,
+    riderA,
+  );
+  const entryA = board.topEntries.find((e) => e.walletAddress === addrA);
+  const entryB = board.topEntries.find((e) => e.walletAddress === addrB);
+  assert.ok(entryA && entryB, 'Both riders must appear on the Leaderboard');
+  assert.equal(entryA.highScore, 1250);
+  assert.equal(entryB.highScore, 600);
+  assert.ok(
+    entryA.rank < entryB.rank,
+    `Rider with higher signed Best Score (${entryA.highScore}) must outrank same-level rider (${entryB.highScore})`,
+  );
+});
+
 
 

@@ -21,6 +21,7 @@ export const DAILY_STREAK_FIRE_THRESHOLD = 2;
 export const DAILY_CHECKIN_BASE_POINTS = 100;
 export const DAILY_STREAK_BONUS_POINTS = 50;
 export const MAX_CHECKIN_POINTS = 999_999_999;
+export const MAX_HIGH_SCORE = 999_999_999;
 export const MAX_USERNAME_LENGTH = 20;
 export const MAX_PROFILE_PAYLOAD_BYTES = 1024;
 export const SUI_PROFILE_SCHEMA_VERSION = 2;
@@ -176,6 +177,7 @@ export interface SuiPlayerProfile {
   loginStreak: number;
   lastLoginDate: string | null;
   checkInPoints: number;
+  highScore: number;
   badges: SuiBadgeId[];
   claimedBadges: SuiBadgeId[];
   updatedAt: string;
@@ -193,6 +195,7 @@ export interface SuiCompactPayload {
   loginStreak: number;
   lastLoginDate?: string;
   checkInPoints?: number;
+  highScore?: number;
   badges: SuiBadgeId[];
   claimedBadges?: SuiBadgeId[];
   updatedAt: string;
@@ -339,6 +342,42 @@ export function clampLoginStreak(raw: unknown): number {
 export function clampCheckInPoints(raw: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
   return Math.max(0, Math.min(MAX_CHECKIN_POINTS, Math.floor(raw)));
+}
+
+/** Clamps saved high score integer to [0..MAX_HIGH_SCORE]. */
+export function clampHighScore(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(MAX_HIGH_SCORE, Math.floor(raw)));
+}
+
+/** True when a finished run score strictly beats the player's saved high score. */
+export function isNewHighScore(
+  profile: Pick<SuiPlayerProfile, 'highScore'>,
+  candidateScore: number,
+): boolean {
+  const safeCandidate = clampHighScore(candidateScore);
+  return safeCandidate > 0 && safeCandidate > clampHighScore(profile.highScore);
+}
+
+/**
+ * Monotonically saves a wallet-verified new high score to a connected Sui profile.
+ * Never lowers an existing saved high score.
+ */
+export function applySignedHighScoreToProfile(
+  profile: SuiPlayerProfile,
+  candidateScore: number,
+  nowIso = new Date().toISOString(),
+): SuiPlayerProfile {
+  const safeCandidate = clampHighScore(candidateScore);
+  const currentBest = clampHighScore(profile.highScore);
+  if (safeCandidate <= currentBest) {
+    return profile;
+  }
+  return {
+    ...profile,
+    highScore: safeCandidate,
+    updatedAt: nowIso,
+  };
 }
 
 /** True when the player currently has an active daily check-in streak (2+ consecutive days). */
@@ -577,6 +616,7 @@ export function createEmptySuiProfile(
     loginStreak: 0,
     lastLoginDate: null,
     checkInPoints: 0,
+    highScore: 0,
     badges: [],
     claimedBadges: [],
     updatedAt: nowIso,
@@ -737,6 +777,10 @@ export function mergeSuiProfiles(
     clampCheckInPoints(a.checkInPoints),
     clampCheckInPoints(b.checkInPoints),
   );
+  const highScore = Math.max(
+    clampHighScore(a.highScore),
+    clampHighScore(b.highScore),
+  );
 
   const aIsNewer = a.updatedAt >= b.updatedAt;
   const updatedAt = aIsNewer ? a.updatedAt : b.updatedAt;
@@ -792,6 +836,7 @@ export function mergeSuiProfiles(
     loginStreak,
     lastLoginDate,
     checkInPoints,
+    highScore,
     badges,
     claimedBadges,
     updatedAt,
@@ -815,6 +860,7 @@ export function serializeSuiProfilePayload(profile: SuiPlayerProfile): string {
   );
   const safeStreak = clampLoginStreak(profile.loginStreak);
   const safePoints = clampCheckInPoints(profile.checkInPoints);
+  const safeHighScore = clampHighScore(profile.highScore);
   const safeLastLoginDate = profile.lastLoginDate
     ? toCalendarDateKey(profile.lastLoginDate)
     : null;
@@ -843,6 +889,7 @@ export function serializeSuiProfilePayload(profile: SuiPlayerProfile): string {
     loginStreak: safeStreak,
     ...(safeLastLoginDate ? { lastLoginDate: safeLastLoginDate } : {}),
     ...(safePoints > 0 ? { checkInPoints: safePoints } : {}),
+    ...(safeHighScore > 0 ? { highScore: safeHighScore } : {}),
     badges: safeBadges,
     ...(safeClaimed.length > 0 ? { claimedBadges: safeClaimed } : {}),
     updatedAt:
@@ -894,6 +941,7 @@ export function parseSuiProfilePayload(
 
     const loginStreak = clampLoginStreak(obj.loginStreak);
     const checkInPoints = clampCheckInPoints(obj.checkInPoints);
+    const highScore = clampHighScore(obj.highScore);
     const lastLoginDate =
       typeof obj.lastLoginDate === 'string' ? toCalendarDateKey(obj.lastLoginDate) : null;
     const username = sanitizeRiderUsername(obj.username);
@@ -934,6 +982,7 @@ export function parseSuiProfilePayload(
       loginStreak,
       lastLoginDate,
       checkInPoints,
+      highScore,
       badges,
       claimedBadges,
       updatedAt,

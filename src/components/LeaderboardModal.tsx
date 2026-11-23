@@ -101,7 +101,7 @@ function LeaderboardRow({ entry }: { entry: SuiLeaderboardEntry }) {
       data-testid={`leaderboard-row-${entry.rank}`}
       data-current-player={entry.isCurrentPlayer ? 'true' : 'false'}
       data-seed={entry.isSeed ? 'true' : 'false'}
-      className={`grid grid-cols-[44px_minmax(0,1fr)_52px_56px_74px] sm:grid-cols-[50px_minmax(0,1fr)_64px_66px_86px] items-center gap-2 rounded-xl px-2.5 sm:px-3 py-2 border transition-colors ${containerClass}`}
+      className={`grid grid-cols-[42px_minmax(0,1fr)_48px_50px_68px] sm:grid-cols-[46px_minmax(0,1fr)_54px_78px_54px_76px] items-center gap-2 rounded-xl px-2.5 sm:px-3 py-2 border transition-colors ${containerClass}`}
     >
       {/* Rank (#1, #2, #3 highlighted) */}
       <div role="cell" className="flex items-center justify-center">
@@ -140,11 +140,14 @@ function LeaderboardRow({ entry }: { entry: SuiLeaderboardEntry }) {
               </span>
             )}
           </div>
-          {entry.hasCustomUsername && (
-            <p className="mt-0.5 font-mono text-[10px] text-[#9BB6D6]/85 tabular-nums truncate leading-none">
-              {entry.shortAddress}
-            </p>
-          )}
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-[#9BB6D6]/85 tabular-nums truncate leading-none">
+            {entry.hasCustomUsername && (
+              <span className="font-mono truncate">{entry.shortAddress}</span>
+            )}
+            <span className="sm:hidden text-[#CFE0FA]/90 font-semibold whitespace-nowrap">
+              {entry.hasCustomUsername ? '· ' : ''}Best {entry.highScore.toLocaleString('en-US')}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -155,6 +158,18 @@ function LeaderboardRow({ entry }: { entry: SuiLeaderboardEntry }) {
           data-testid={`leaderboard-level-${entry.rank}`}
         >
           LV {entry.highestCompletedLevel}
+        </span>
+      </div>
+
+      {/* Signed Best Score (Desktop Column) */}
+      <div role="cell" className="hidden sm:block text-right">
+        <span
+          className={`font-display text-xs sm:text-sm font-bold tabular-nums ${
+            entry.highScore > 0 ? 'text-[#BAE6FD]' : 'text-[#9BB6D6]/70'
+          }`}
+          data-testid={`leaderboard-highscore-${entry.rank}`}
+        >
+          {entry.highScore.toLocaleString('en-US')}
         </span>
       </div>
 
@@ -170,7 +185,7 @@ function LeaderboardRow({ entry }: { entry: SuiLeaderboardEntry }) {
         </span>
       </div>
 
-      {/* Total Points (Levels + Daily Check-Ins) */}
+      {/* Total Points (Levels + Daily Check-Ins + Signed Best Score) */}
       <div role="cell" className="text-right">
         <span
           className={`font-display text-xs sm:text-sm font-bold tabular-nums ${
@@ -224,7 +239,7 @@ export function LeaderboardModal({
         aria-modal="true"
         aria-labelledby="leaderboard-modal-title"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[560px] max-h-[88vh] flex flex-col overflow-hidden rounded-2xl border border-white/20 bg-[#081224]/88 backdrop-blur-xl shadow-[0_18px_48px_rgba(4,9,22,0.56)] text-left"
+        className="w-full max-w-[612px] max-h-[88vh] flex flex-col overflow-hidden rounded-2xl border border-white/20 bg-[#081224]/88 backdrop-blur-xl shadow-[0_18px_48px_rgba(4,9,22,0.56)] text-left"
       >
         {/* Pinned Header */}
         <div className="px-4 sm:px-5 pt-4 pb-3 border-b border-white/10 flex items-start justify-between gap-3 shrink-0">
@@ -259,13 +274,16 @@ export function LeaderboardModal({
           role="row"
           className="px-4 sm:px-5 py-2 border-b border-white/10 bg-[#060E1D]/55 shrink-0"
         >
-          <div className="grid grid-cols-[44px_minmax(0,1fr)_52px_56px_74px] sm:grid-cols-[50px_minmax(0,1fr)_64px_66px_86px] items-center gap-2 px-2.5 sm:px-3 text-[10px] font-extrabold uppercase tracking-wider text-[#9BB6D6]">
+          <div className="grid grid-cols-[42px_minmax(0,1fr)_48px_50px_68px] sm:grid-cols-[46px_minmax(0,1fr)_54px_78px_54px_76px] items-center gap-2 px-2.5 sm:px-3 text-[10px] font-extrabold uppercase tracking-wider text-[#9BB6D6]">
             <span role="columnheader" className="text-center">
               {UI_COPY.leaderboard.colRank}
             </span>
             <span role="columnheader">{UI_COPY.leaderboard.colRider}</span>
             <span role="columnheader" className="text-right">
               {UI_COPY.leaderboard.colLevel}
+            </span>
+            <span role="columnheader" className="hidden sm:inline text-right">
+              {UI_COPY.leaderboard.colHighScore}
             </span>
             <span role="columnheader" className="text-right">
               {UI_COPY.leaderboard.colBadges}
@@ -309,6 +327,10 @@ export function LeaderboardModal({
               </span>
               <span aria-hidden="true" className="text-white/35">·</span>
               <span>LV {board.currentPlayerEntry.highestCompletedLevel}</span>
+              <span aria-hidden="true" className="text-white/35">·</span>
+              <span className="text-[#BAE6FD]">
+                Best {board.currentPlayerEntry.highScore.toLocaleString('en-US')}
+              </span>
               <span aria-hidden="true" className="text-white/35">·</span>
               <span>
                 {board.currentPlayerEntry.claimedBadgesCount}/

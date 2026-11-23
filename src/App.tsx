@@ -12,7 +12,9 @@ import {
 } from './game/simulation';
 import {
   applyLevelCompletionToProfile,
+  applySignedHighScoreToProfile,
   createEmptySuiProfile,
+  isNewHighScore,
   type SuiPlayerProfile,
 } from './game/suiProfileLogic';
 import {
@@ -21,6 +23,7 @@ import {
   loadWalletSuiProfile,
   refreshDetectedSuiWallets,
   saveWalletSuiProfile,
+  signSuiProfileAction,
   subscribeDetectedSuiWallets,
   subscribeWalletAccountChanges,
   type ConnectedSuiWalletSession,
@@ -118,6 +121,14 @@ export default function App() {
   const [walletError, setWalletError] = useState<string | null>(null);
   const savedVictoryKeyRef = useRef<string | null>(null);
 
+  // Cumulative run score across a continuous multi-level run (reset on Game Over / New Game / Title)
+  const [bankedRunScore, setBankedRunScore] = useState(0);
+  // Session-only best score for Demo Mode (never written to Sui wallet storage or Leaderboard)
+  const [demoBestScore, setDemoBestScore] = useState(0);
+  const [highScoreSaving, setHighScoreSaving] = useState(false);
+  const [highScoreSavedForRun, setHighScoreSavedForRun] = useState(false);
+  const [highScoreError, setHighScoreError] = useState<string | null>(null);
+
   // Discover standard Sui browser wallets without interfering with gameplay or Demo Mode
   useEffect(() => {
     return subscribeDetectedSuiWallets((wallets) => {
@@ -170,6 +181,9 @@ export default function App() {
     setWalletProfile(null);
     setProfileModalOpen(false);
     setWalletError(null);
+    setHighScoreSaving(false);
+    setHighScoreSavedForRun(false);
+    setHighScoreError(null);
     savedVictoryKeyRef.current = null;
     // Disconnect wallet cleanly without deleting local game data or saved wallet profiles
     void disconnectSuiWallet(active);
@@ -241,6 +255,62 @@ export default function App() {
       return updated;
     });
   }, [walletSession, hud.phase, hud.levelNumber]);
+
+  // Reset per-outcome high score save status whenever entering active play or title screen
+  useEffect(() => {
+    if (hud.phase === 'playing' || hud.phase === 'title') {
+      setHighScoreSavedForRun(false);
+      setHighScoreError(null);
+    }
+  }, [hud.phase, hud.levelNumber]);
+
+  const runTotalScore = bankedRunScore + Math.max(0, Math.round(hud.score));
+  const savedHighScore = walletSession
+    ? (walletProfile?.highScore ?? 0)
+    : demoBestScore;
+
+  // Update Demo Mode session-only best score on outcome (never touches Sui Leaderboard storage)
+  useEffect(() => {
+    if (walletSession) return;
+    if (hud.phase === 'victory' || hud.phase === 'gameover') {
+      if (runTotalScore > demoBestScore) {
+        setDemoBestScore(runTotalScore);
+      }
+    }
+  }, [walletSession, hud.phase, runTotalScore, demoBestScore]);
+
+  // Require real Sui wallet signature (sui:signPersonalMessage) before saving a New High Score to the Leaderboard
+  const handleSaveHighScore = useCallback(async () => {
+    if (!walletSession || highScoreSaving) return;
+    const currentBest = walletProfile?.highScore ?? 0;
+    if (!isNewHighScore({ highScore: currentBest }, runTotalScore)) return;
+
+    setHighScoreSaving(true);
+    setHighScoreError(null);
+    try {
+      const signResult = await signSuiProfileAction(
+        walletSession,
+        `Save High Score: ${runTotalScore} (Level ${hud.levelNumber})`,
+      );
+      if (!signResult.ok) {
+        setHighScoreError(signResult.message);
+        return;
+      }
+
+      setWalletProfile((prev) => {
+        const base =
+          prev && prev.walletAddress === walletSession.address
+            ? prev
+            : createEmptySuiProfile(walletSession.address);
+        const updated = applySignedHighScoreToProfile(base, runTotalScore);
+        saveWalletSuiProfile(walletSession.address, updated);
+        return updated;
+      });
+      setHighScoreSavedForRun(true);
+    } finally {
+      setHighScoreSaving(false);
+    }
+  }, [walletSession, walletProfile, highScoreSaving, runTotalScore, hud.levelNumber]);
 
   // Close wallet/profile/leaderboard overlays if gameplay starts
   useEffect(() => {
@@ -338,6 +408,20 @@ export default function App() {
         hud={hud}
         muted={muted}
         walletSession={walletSession}
+        highScoreProps={{
+          runTotalScore,
+          savedHighScore,
+          walletConnected: walletSession !== null,
+          isNewHighScore:
+            walletSession !== null &&
+            isNewHighScore({ highScore: walletProfile?.highScore ?? 0 }, runTotalScore),
+          saving: highScoreSaving,
+          saved: highScoreSavedForRun,
+          errorMessage: highScoreError,
+          onSaveHighScore: () => {
+            void handleSaveHighScore();
+          },
+        }}
         onOpenConnectWallet={() => {
           setWalletError(null);
           setDetectedWallets(refreshDetectedSuiWallets());
@@ -355,13 +439,25 @@ export default function App() {
           setLeaderboardModalOpen(true);
         }}
         onDisconnectWallet={handleDisconnectWallet}
-        onStart={() => engineRef.current?.startGame()}
+        onStart={() => {
+          setBankedRunScore(0);
+          engineRef.current?.startGame();
+        }}
         onPause={() => engineRef.current?.pauseGame()}
         onResume={() => engineRef.current?.resumeGame()}
         onRetryLevel={() => engineRef.current?.retryLevel()}
-        onNextLevel={() => engineRef.current?.nextLevel()}
-        onNewGame={() => engineRef.current?.newGame()}
-        onReturnToTitle={() => engineRef.current?.returnToTitle()}
+        onNextLevel={() => {
+          setBankedRunScore((prev) => prev + Math.max(0, Math.round(hud.score)));
+          engineRef.current?.nextLevel();
+        }}
+        onNewGame={() => {
+          setBankedRunScore(0);
+          engineRef.current?.newGame();
+        }}
+        onReturnToTitle={() => {
+          setBankedRunScore(0);
+          engineRef.current?.returnToTitle();
+        }}
         onJump={() => engineRef.current?.triggerJump()}
         onGrabChange={(held) => engineRef.current?.setGrabHeld(held)}
         onTrickChange={(held) => engineRef.current?.setTrickHeld(held)}

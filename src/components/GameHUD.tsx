@@ -11,12 +11,13 @@ import {
 import { shortenSuiAddress } from '../game/suiProfileLogic';
 import type { ConnectedSuiWalletSession } from '../game/suiWalletService';
 import { MiniMap } from './MiniMap';
-import { OutcomeOverlay } from './OutcomeOverlay';
+import { OutcomeOverlay, type OutcomeHighScoreProps } from './OutcomeOverlay';
 
 interface GameHUDProps {
   hud: HudSnapshot;
   muted: boolean;
   walletSession: ConnectedSuiWalletSession | null;
+  highScoreProps: OutcomeHighScoreProps;
   onOpenConnectWallet: () => void;
   onOpenProfile: () => void;
   onOpenLeaderboard: () => void;
@@ -112,6 +113,7 @@ export function GameHUD({
   hud,
   muted,
   walletSession,
+  highScoreProps,
   onOpenConnectWallet,
   onOpenProfile,
   onOpenLeaderboard,
@@ -1108,6 +1110,7 @@ export function GameHUD({
         <OutcomeOverlay
           hud={hud}
           overlayKey={outcomeOverlayKey}
+          highScoreProps={highScoreProps}
           onRetryLevel={onRetryLevel}
           onNextLevel={onNextLevel}
           onNewGame={onNewGame}

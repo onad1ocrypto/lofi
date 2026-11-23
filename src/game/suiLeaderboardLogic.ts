@@ -19,6 +19,7 @@ import {
   MAX_GAME_LEVEL,
   SUI_BADGE_DEFINITIONS,
   clampCheckInPoints,
+  clampHighScore,
   normalizeAvatarId,
   normalizeSuiAddress,
   sanitizeRiderUsername,
@@ -40,6 +41,7 @@ export interface SuiLeaderboardEntry {
   readonly hasCustomUsername: boolean;
   readonly avatarId: SuiAvatarId;
   readonly highestCompletedLevel: number;
+  readonly highScore: number;
   readonly levelPoints: number;
   readonly checkInPoints: number;
   readonly totalPoints: number;
@@ -61,6 +63,7 @@ interface RawLeaderboardRecord {
   username: string;
   avatarId: SuiAvatarId;
   highestCompletedLevel: number;
+  highScore: number;
   checkInPoints: number;
   claimedBadgesCount: number;
   isSeed: boolean;
@@ -78,6 +81,7 @@ export const SEED_LEADERBOARD_RIDERS: readonly RawLeaderboardRecord[] = [
     username: 'GlacierKing',
     avatarId: 'lofi_shades',
     highestCompletedLevel: 9,
+    highScore: 3850,
     checkInPoints: 650,
     claimedBadgesCount: 6,
     isSeed: true,
@@ -88,6 +92,7 @@ export const SEED_LEADERBOARD_RIDERS: readonly RawLeaderboardRecord[] = [
     username: 'FrostCarver',
     avatarId: 'lofi_goggles',
     highestCompletedLevel: 7,
+    highScore: 2700,
     checkInPoints: 500,
     claimedBadgesCount: 5,
     isSeed: true,
@@ -98,6 +103,7 @@ export const SEED_LEADERBOARD_RIDERS: readonly RawLeaderboardRecord[] = [
     username: 'YetiBeats',
     avatarId: 'lofi_headphones',
     highestCompletedLevel: 5,
+    highScore: 1950,
     checkInPoints: 400,
     claimedBadgesCount: 4,
     isSeed: true,
@@ -108,6 +114,7 @@ export const SEED_LEADERBOARD_RIDERS: readonly RawLeaderboardRecord[] = [
     username: 'PowderScout',
     avatarId: 'lofi_beanie',
     highestCompletedLevel: 4,
+    highScore: 1400,
     checkInPoints: 250,
     claimedBadgesCount: 3,
     isSeed: true,
@@ -118,6 +125,7 @@ export const SEED_LEADERBOARD_RIDERS: readonly RawLeaderboardRecord[] = [
     username: 'AlpineDrift',
     avatarId: 'lofi_goggles',
     highestCompletedLevel: 3,
+    highScore: 950,
     checkInPoints: 250,
     claimedBadgesCount: 2,
     isSeed: true,
@@ -128,6 +136,7 @@ export const SEED_LEADERBOARD_RIDERS: readonly RawLeaderboardRecord[] = [
     username: 'SnowySui',
     avatarId: 'lofi_beanie',
     highestCompletedLevel: 1,
+    highScore: 450,
     checkInPoints: 100,
     claimedBadgesCount: 1,
     isSeed: true,
@@ -143,14 +152,17 @@ export function computeLeaderboardLevelPoints(highestCompletedLevel: number): nu
 
 /**
  * Computes total Leaderboard points for a player profile:
- * level completion points + daily check-in points.
+ * level completion points + daily check-in points + wallet-signed high score.
  */
 export function computeLeaderboardTotalPoints(
-  profile: Pick<SuiPlayerProfile, 'highestCompletedLevel' | 'checkInPoints'>,
+  profile: Pick<SuiPlayerProfile, 'highestCompletedLevel' | 'checkInPoints'> & {
+    highScore?: number;
+  },
 ): number {
   return (
     computeLeaderboardLevelPoints(profile.highestCompletedLevel) +
-    clampCheckInPoints(profile.checkInPoints)
+    clampCheckInPoints(profile.checkInPoints) +
+    clampHighScore(profile.highScore)
   );
 }
 
@@ -178,7 +190,8 @@ function toUnrankedEntry(
   );
   const levelPoints = computeLeaderboardLevelPoints(highestCompletedLevel);
   const checkInPoints = clampCheckInPoints(record.checkInPoints);
-  const totalPoints = levelPoints + checkInPoints;
+  const highScore = clampHighScore(record.highScore);
+  const totalPoints = levelPoints + checkInPoints + highScore;
   const claimedBadgesCount = Math.max(
     0,
     Math.min(LEADERBOARD_TOTAL_BADGES, Math.floor(record.claimedBadgesCount || 0)),
@@ -191,6 +204,7 @@ function toUnrankedEntry(
     hasCustomUsername: cleanedUsername.length > 0,
     avatarId: normalizeAvatarId(record.avatarId ?? DEFAULT_SUI_AVATAR_ID),
     highestCompletedLevel,
+    highScore,
     levelPoints,
     checkInPoints,
     totalPoints,
@@ -260,6 +274,7 @@ export function buildSuiLeaderboard(
       username: sanitizeRiderUsername(profile.username),
       avatarId: normalizeAvatarId(profile.avatarId),
       highestCompletedLevel: profile.highestCompletedLevel,
+      highScore: clampHighScore(profile.highScore),
       checkInPoints: clampCheckInPoints(profile.checkInPoints),
       claimedBadgesCount: countClaimedBadges(profile),
       isSeed: false,

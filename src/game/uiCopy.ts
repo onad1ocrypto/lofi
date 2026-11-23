@@ -252,6 +252,7 @@ export const UI_COPY = {
     colRank: 'Rank',
     colRider: 'Rider',
     colLevel: 'Level',
+    colHighScore: 'Best Score',
     colBadges: 'Badges',
     colPoints: 'Points',
     youTag: 'You',
@@ -260,6 +261,15 @@ export const UI_COPY = {
     yourRankPrefix: 'Your Rank',
     closeButton: 'Close',
     closeAria: 'Close leaderboard modal',
+  },
+  highScore: {
+    newHighScoreHeading: 'NEW HIGH SCORE!',
+    saveWithWalletButton: 'SIGN & SAVE SCORE',
+    savingWithWalletButton: 'SIGNING…',
+    savedToLeaderboard: 'Saved to Sui Leaderboard',
+    bestScoreLabel: 'Best Score',
+    runScoreLabel: 'Run Score',
+    demoHint: 'Connect a Sui wallet to sign & save your High Score to the Leaderboard',
   },
   lilYetiAltPrefix: 'Lil Yeti',
 } as const;

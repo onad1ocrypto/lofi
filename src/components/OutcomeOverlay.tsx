@@ -6,10 +6,22 @@ import {
 import type { HudSnapshot } from '../game/types';
 import { UI_COPY } from '../game/uiCopy';
 
+export interface OutcomeHighScoreProps {
+  runTotalScore: number;
+  savedHighScore: number;
+  walletConnected: boolean;
+  isNewHighScore: boolean;
+  saving: boolean;
+  saved: boolean;
+  errorMessage: string | null;
+  onSaveHighScore: () => void;
+}
+
 interface OutcomeOverlayProps {
   hud: HudSnapshot;
   /** Monotonic key incremented on each outcome appearance so CSS entrance animations reset cleanly on retry. */
   overlayKey: number;
+  highScoreProps?: OutcomeHighScoreProps;
   onRetryLevel: () => void;
   onNextLevel: () => void;
   onNewGame: () => void;
@@ -73,6 +85,7 @@ function FollowerSprite({
 export function OutcomeOverlay({
   hud,
   overlayKey,
+  highScoreProps,
   onRetryLevel,
   onNextLevel,
   onNewGame,
@@ -254,11 +267,13 @@ export function OutcomeOverlay({
                 data-testid="victory-score-summary"
               >
                 <span className="text-[#C8DAF8] uppercase tracking-wider text-[clamp(10px,0.95vw,12px)]">
-                  {UI_COPY.hud.scoreLabel}
+                  {highScoreProps && highScoreProps.runTotalScore > model.score
+                    ? UI_COPY.highScore.runScoreLabel
+                    : UI_COPY.hud.scoreLabel}
                 </span>
                 <span className="flex items-center gap-2 text-white tabular-nums">
                   <span className="font-display text-[#FFD15C]" data-testid="victory-score-value">
-                    {model.score.toLocaleString()}
+                    {(highScoreProps ? highScoreProps.runTotalScore : model.score).toLocaleString()}
                   </span>
                   {model.grabCount > 0 && (
                     <span className="text-[clamp(11px,1vw,13px)] text-[#DCEAFF]">
@@ -268,6 +283,24 @@ export function OutcomeOverlay({
                   )}
                 </span>
               </div>
+
+              {highScoreProps &&
+                highScoreProps.walletConnected &&
+                !highScoreProps.isNewHighScore &&
+                !highScoreProps.saved &&
+                highScoreProps.savedHighScore > 0 && (
+                  <div
+                    className="flex items-center justify-between gap-x-3 font-bold text-[#CFE0FA] border-b border-white/10 pb-1 text-[clamp(11px,1vw,13px)]"
+                    data-testid="outcome-preserved-highscore"
+                  >
+                    <span className="text-[#9BB6D6] uppercase tracking-wider text-[clamp(10px,0.9vw,11px)]">
+                      {UI_COPY.highScore.bestScoreLabel}
+                    </span>
+                    <span className="font-display text-[#BAE6FD] tabular-nums">
+                      {highScoreProps.savedHighScore.toLocaleString()}
+                    </span>
+                  </div>
+                )}
 
               {model.showRecruitBanner && model.recruitLabel && (
                 <div
@@ -298,17 +331,107 @@ export function OutcomeOverlay({
               <span className="text-[#FFD15C]" data-testid="gameover-follower-info">
                 {model.arrivedFollowersLabel}
               </span>
-              {(model.score > 0 || model.grabCount > 0) && (
+              {((highScoreProps ? highScoreProps.runTotalScore : model.score) > 0 ||
+                model.grabCount > 0) && (
                 <>
                   <span className="text-white/40" aria-hidden="true">·</span>
                   <span className="tabular-nums text-white" data-testid="gameover-score-info">
-                    Score {model.score.toLocaleString()}
+                    Score {(highScoreProps ? highScoreProps.runTotalScore : model.score).toLocaleString()}
                     {model.peakMultiplier > 1 ? ` (Max ×${model.peakMultiplier})` : ''}
                   </span>
                 </>
               )}
+              {highScoreProps &&
+                highScoreProps.walletConnected &&
+                !highScoreProps.isNewHighScore &&
+                !highScoreProps.saved &&
+                highScoreProps.savedHighScore > 0 && (
+                  <>
+                    <span className="text-white/40" aria-hidden="true">·</span>
+                    <span
+                      className="tabular-nums text-[#BAE6FD]"
+                      data-testid="outcome-preserved-highscore"
+                    >
+                      Best {highScoreProps.savedHighScore.toLocaleString()}
+                    </span>
+                  </>
+                )}
             </div>
           )}
+
+          {/* New High Score — Sign with Sui Wallet to persist on Leaderboard */}
+          {highScoreProps && highScoreProps.walletConnected && highScoreProps.saved && (
+            <div
+              data-testid="highscore-saved-badge"
+              className="w-full rounded-xl px-3 py-1.5 border border-[#34D399]/55 bg-[#064E3B]/55 backdrop-blur-md flex items-center justify-between gap-2 text-xs font-extrabold text-[#D1FAE5]"
+            >
+              <span className="flex items-center gap-1.5 min-w-0">
+                <span aria-hidden="true" className="text-[#6EE7B7]">✓</span>
+                <span className="truncate">{UI_COPY.highScore.savedToLeaderboard}</span>
+              </span>
+              <span className="font-display text-sm text-[#FFD15C] tabular-nums shrink-0">
+                {highScoreProps.runTotalScore.toLocaleString()}
+              </span>
+            </div>
+          )}
+
+          {highScoreProps &&
+            highScoreProps.walletConnected &&
+            highScoreProps.isNewHighScore &&
+            !highScoreProps.saved && (
+              <div
+                data-testid="outcome-new-highscore-card"
+                className="w-full rounded-xl px-3 py-2 border border-[#FFD15C]/65 bg-gradient-to-r from-[#F59E0B]/22 via-[#0C1D3B]/80 to-[#0B1730]/82 backdrop-blur-md shadow-[0_6px_18px_rgba(8,14,32,0.28)] flex flex-col gap-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-col text-left min-w-0">
+                    <span className="font-display text-xs sm:text-sm font-bold tracking-wider uppercase text-[#FFD15C] leading-tight">
+                      {UI_COPY.highScore.newHighScoreHeading}
+                    </span>
+                    <span className="text-[11px] font-bold text-[#DCEAFF] tabular-nums leading-tight">
+                      {highScoreProps.runTotalScore.toLocaleString()}
+                      {highScoreProps.savedHighScore > 0
+                        ? ` (Prev Best ${highScoreProps.savedHighScore.toLocaleString()})`
+                        : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={highScoreProps.saving}
+                    data-testid="btn-save-highscore"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={highScoreProps.onSaveHighScore}
+                    className="cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg bg-[#38BDF8] hover:bg-[#7DD3FC] active:translate-y-0.5 text-[#081224] text-[11px] font-extrabold uppercase tracking-wider border border-[#E0F2FE]/80 shadow-[0_2px_10px_rgba(56,189,248,0.3)] transition-colors whitespace-nowrap shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    {highScoreProps.saving
+                      ? UI_COPY.highScore.savingWithWalletButton
+                      : UI_COPY.highScore.saveWithWalletButton}
+                  </button>
+                </div>
+                {highScoreProps.errorMessage && (
+                  <p
+                    data-testid="highscore-save-error"
+                    className="text-[11px] font-semibold text-[#FCA5A5] text-left leading-snug"
+                  >
+                    {highScoreProps.errorMessage}
+                  </p>
+                )}
+              </div>
+            )}
+
+          {highScoreProps &&
+            !highScoreProps.walletConnected &&
+            highScoreProps.runTotalScore > 0 && (
+              <p
+                data-testid="outcome-demo-highscore-hint"
+                className="w-full rounded-lg px-3 py-1 border border-white/12 bg-[#0a1428]/26 text-[10.5px] font-semibold text-[#CFE0FA]/90 text-center leading-snug"
+              >
+                {highScoreProps.savedHighScore > 0
+                  ? `Session Best ${Math.max(highScoreProps.savedHighScore, highScoreProps.runTotalScore).toLocaleString()} · `
+                  : ''}
+                {UI_COPY.highScore.demoHint}
+              </p>
+            )}
 
           {/* Action Buttons */}
           {isVictory ? (

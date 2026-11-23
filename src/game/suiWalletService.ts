@@ -16,6 +16,7 @@ import {
   applyDailyLoginToProfile,
   buildSuiProfileStorageKey,
   clampCheckInPoints,
+  clampHighScore,
   clampLoginStreak,
   createEmptySuiProfile,
   deriveBadgesForProgress,
@@ -382,6 +383,7 @@ async function fetchOnChainSuiProfile(
     const lilYetisRecruited = Number(fields.lil_yetis_recruited ?? 0);
     const loginStreak = clampLoginStreak(Number(fields.login_streak ?? 0));
     const checkInPoints = clampCheckInPoints(Number(fields.check_in_points ?? 0));
+    const highScore = clampHighScore(Number(fields.high_score ?? 0));
     const lastLoginDate =
       typeof fields.last_login_date === 'string'
         ? toCalendarDateKey(fields.last_login_date)
@@ -415,6 +417,7 @@ async function fetchOnChainSuiProfile(
       loginStreak,
       lastLoginDate,
       checkInPoints,
+      highScore,
       badges: derivedBadges,
       claimedBadges: rawClaimed.filter((id) => earnedSet.has(id)),
       updatedAt: new Date().toISOString(),
