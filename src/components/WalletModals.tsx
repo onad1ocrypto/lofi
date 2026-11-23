@@ -221,6 +221,38 @@ export function WalletConnectModal({
           )}
         </div>
 
+        <div className="mt-3 pt-2.5 border-t border-white/10">
+          <p className="text-[9.5px] font-extrabold uppercase tracking-wider text-[#9BB6D6] mb-1.5">
+            Supported Sui Wallets
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { name: 'Phantom', url: 'https://phantom.app/' },
+              { name: 'Nightly', url: 'https://nightly.app/' },
+              { name: 'OKX Wallet', url: 'https://www.okx.com/web3' },
+              { name: 'Surf', url: 'https://surf.tech/' },
+              { name: 'Slush', url: 'https://slush.app/' },
+            ]
+              .filter(
+                (item) =>
+                  !wallets.some((w) =>
+                    w.name.toLowerCase().includes(item.name.toLowerCase().split(' ')[0]),
+                  ),
+              )
+              .map((item) => (
+                <a
+                  key={item.name}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2 py-1 rounded-lg border border-white/12 bg-white/5 hover:bg-white/14 text-[10px] font-semibold text-[#DCEBFF] transition-colors"
+                >
+                  {item.name} ↗
+                </a>
+              ))}
+          </div>
+        </div>
+
         <div className="mt-3 pt-2.5 border-t border-white/12 flex items-center justify-between gap-2">
           <span className="text-[10px] font-semibold text-[#C8DAF8]/85">
             {UI_COPY.wallet.demoFallbackNote}
