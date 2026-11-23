@@ -479,3 +479,51 @@ export function saveWalletSuiProfile(
     return false;
   }
 }
+
+/**
+ * Requests a real Wallet Standard personal message signature from the
+ * connected Sui wallet (e.g., Nightly, Slush, Backpack) to verify
+ * profile actions such as claiming task points/badges or updating username.
+ */
+export async function signSuiProfileAction(
+  session: ConnectedSuiWalletSession | null,
+  actionLabel: string,
+): Promise<{ ok: boolean; message: string }> {
+  if (!session) {
+    return { ok: false, message: 'No wallet connected.' };
+  }
+  const features = session.provider.features;
+  const signFeature = features?.['sui:signPersonalMessage'] as
+    | {
+        signPersonalMessage: (input: {
+          message: Uint8Array;
+          account: { address: string };
+        }) => Promise<{ bytes?: string; signature?: string }>;
+      }
+    | undefined;
+
+  if (!signFeature || typeof signFeature.signPersonalMessage !== 'function') {
+    return {
+      ok: false,
+      message: `${session.walletName} does not expose sui:signPersonalMessage.`,
+    };
+  }
+
+  try {
+    const account =
+      session.provider.accounts?.find(
+        (a) => normalizeSuiAddress(a.address) === normalizeSuiAddress(session.address),
+      ) ?? { address: session.address };
+    const payload = new TextEncoder().encode(
+      `Lofi Ice Escape\nAction: ${actionLabel}\nWallet: ${session.address}\nTimestamp: ${new Date().toISOString()}`,
+    );
+    await signFeature.signPersonalMessage({
+      message: payload,
+      account: account as { address: string },
+    });
+    return { ok: true, message: 'Verified with wallet signature!' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Signature rejected.';
+    return { ok: false, message: msg };
+  }
+}

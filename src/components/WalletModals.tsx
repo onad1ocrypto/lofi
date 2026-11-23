@@ -8,9 +8,10 @@ import {
   type SuiBadgeId,
   type SuiPlayerProfile,
 } from '../game/suiProfileLogic';
-import type {
-  ConnectedSuiWalletSession,
-  DetectedSuiWallet,
+import {
+  signSuiProfileAction,
+  type ConnectedSuiWalletSession,
+  type DetectedSuiWallet,
 } from '../game/suiWalletService';
 import { UI_COPY } from '../game/uiCopy';
 
@@ -279,6 +280,31 @@ export function ProfileModal({
   onClose,
 }: ProfileModalProps) {
   const [copied, setCopied] = useState(false);
+  const usernameKey = `lofi_sui_username_${session.address.toLowerCase()}`;
+  const [username, setUsername] = useState(() => {
+    try {
+      return window.localStorage.getItem(usernameKey) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [signing, setSigning] = useState(false);
+  const [signStatus, setSignStatus] = useState<string | null>(null);
+
+  const handleWalletVerify = async (actionLabel: string) => {
+    setSigning(true);
+    setSignStatus(null);
+    const res = await signSuiProfileAction(session, actionLabel);
+    setSigning(false);
+    if (res.ok && username.trim()) {
+      try {
+        window.localStorage.setItem(usernameKey, username.trim());
+      } catch {
+        // ignore storage errors
+      }
+    }
+    setSignStatus(res.message);
+  };
   const shortAddr = shortenSuiAddress(session.address);
   const earnedSet = new Set<SuiBadgeId>(profile.badges);
   const streakFireActive = !loading && hasStreakFireBadge(profile);
@@ -488,6 +514,45 @@ export function ProfileModal({
               );
             })}
           </div>
+        </div>
+
+        {/* Interactive Wallet Actions: Username & Claim/Verify */}
+        <div className="mt-3 pt-2.5 border-t border-white/12 space-y-2">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              maxLength={20}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Set rider username..."
+              className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-white/16 bg-white/6 text-[11px] font-semibold text-white placeholder-[#9BB6D6]/60 focus:outline-none focus:border-[#8FD1FF]"
+            />
+            <button
+              type="button"
+              disabled={signing || !username.trim()}
+              onClick={() => handleWalletVerify(`Set username: ${username.trim()}`)}
+              className="cursor-pointer px-2.5 py-1.5 rounded-lg border border-[#38BDF8]/45 bg-[#38BDF8]/18 hover:bg-[#38BDF8]/30 disabled:opacity-45 text-[10px] font-extrabold uppercase tracking-wider text-[#BAE6FD] transition-colors shrink-0"
+            >
+              Save
+            </button>
+          </div>
+          <button
+            type="button"
+            disabled={signing}
+            onClick={() =>
+              handleWalletVerify(
+                `Claim ${profile.badges.length} badges & ${profile.loginStreak}d streak`,
+              )
+            }
+            className="cursor-pointer w-full py-1.5 rounded-lg border border-[#F59E0B]/45 bg-[#F59E0B]/18 hover:bg-[#F59E0B]/30 disabled:opacity-45 text-[10.5px] font-extrabold uppercase tracking-wider text-[#FDE68A] transition-colors"
+          >
+            {signing ? 'Waiting for Wallet...' : 'Verify & Claim with Wallet'}
+          </button>
+          {signStatus && (
+            <p className="text-[10px] font-semibold text-[#93C5FD] text-center">
+              {signStatus}
+            </p>
+          )}
         </div>
 
         <p className="mt-2.5 text-[9.5px] font-semibold text-[#C8DAF8]/75 text-center">
