@@ -365,7 +365,7 @@ export function OutcomeOverlay({
                 data-start="true"
                 data-testid="btn-retry-level"
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={handleRetryOnce}
+                onClick={handleNewGameOnce}
                 className="font-display cursor-pointer px-8 py-2 rounded-xl bg-[#EB7A28] hover:bg-[#F58838] active:translate-y-0.5 text-white text-[clamp(16px,1.6vw,20px)] leading-tight font-bold tracking-wider uppercase border-2 border-[#161E36] shadow-[0_3px_0_#161E36,0_8px_18px_rgba(10,16,32,0.34)] transition-transform focus:outline-none focus-visible:ring-4 focus-visible:ring-[#8FD1FF]"
               >
                 {UI_COPY.gameover.tryAgainButton}

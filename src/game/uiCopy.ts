@@ -182,7 +182,7 @@ export const UI_COPY = {
     heading: 'GAME OVER',
     message: 'Caught by the snow!',
     heroAlt: 'Lofi buried in the snow',
-    tryAgainButton: 'TRY AGAIN',
+    tryAgainButton: 'TRY AGAIN (LEVEL 1)',
     mainMenuButton: 'MAIN MENU',
   },
   wallet: {

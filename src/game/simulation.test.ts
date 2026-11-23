@@ -188,6 +188,7 @@ import {
   createInitialSimulationState,
   evaluateRampSurface,
   resetSimulationState,
+  restartAfterGameOver,
   retryCurrentLevel,
   samplePathAtTravelDistance,
   startNewGame,
@@ -7512,4 +7513,29 @@ test('Sui Leaderboard: ranking priority (level -> total points -> badges), Top 1
   assert.equal(capped.topEntries.length, LEADERBOARD_MAX_ENTRIES);
   assert.equal(capped.currentPlayerEntry?.rank, 12);
 });
+
+test('Game Over resets run strictly back to Level 1 (solo Lofi, 0 followers, fresh score) so badge runs require full effort', () => {
+  // Simulate getting Game Over on Level 6 (with 5 followers and accumulated score)
+  const state = createInitialSimulationState('playing', undefined, 6);
+  assert.equal(state.levelNumber, 6);
+  assert.equal(state.followers.length, 5);
+  state.distance = 240;
+  state.score = 1850;
+  state.phase = 'gameover';
+
+  // Restarting after Game Over must return strictly to Level 1 with Lofi solo
+  restartAfterGameOver(state, 'playing');
+  assert.equal(state.phase, 'playing');
+  assert.equal(state.levelNumber, 1, 'Game Over retry must return to Level 1');
+  assert.equal(state.followers.length, 0, 'Game Over retry must reset active crew to 0 Lil Yetis');
+  assert.equal(state.unlockedFollowers, 0, 'Game Over retry must reset run-unlocked crew to 0');
+  assert.equal(state.distance, 0, 'Game Over retry must reset distance to 0');
+  assert.equal(state.score, 0, 'Game Over retry must reset run score to 0');
+  assert.equal(
+    UI_COPY.gameover.tryAgainButton.includes('LEVEL 1'),
+    true,
+    'Game Over button copy should communicate returning to Level 1',
+  );
+});
+
 

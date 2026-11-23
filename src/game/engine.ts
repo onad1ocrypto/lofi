@@ -924,12 +924,16 @@ export function createGameEngine(
       } else if (sim.phase === 'gameover') {
         if (!arrivalState.gameoverUiReady) return;
         e.preventDefault();
-        retryLevel();
+        newGame();
       }
     } else if (e.code === 'KeyM' && !e.repeat) {
       toggleMute();
     } else if (e.code === 'KeyR' && !e.repeat) {
-      if (sim.phase === 'playing' || sim.phase === 'paused' || sim.phase === 'gameover') {
+      if (sim.phase === 'gameover') {
+        if (!arrivalState.gameoverUiReady) return;
+        e.preventDefault();
+        newGame();
+      } else if (sim.phase === 'playing' || sim.phase === 'paused') {
         e.preventDefault();
         retryLevel();
       }
@@ -1111,8 +1115,12 @@ export function createGameEngine(
     emitHudNow();
   };
 
-  /** Retry current level: never adds a Yeti; restores followers strictly to (levelNumber - 1) and resets shelter celebration. */
+  /** Retry current level (Pause/Victory replay). On Game Over, always resets back to Level 1. */
   const retryLevel = () => {
+    if (sim.phase === 'gameover') {
+      newGame();
+      return;
+    }
     blurActiveElement();
     audio.unlock();
     clearInputs();

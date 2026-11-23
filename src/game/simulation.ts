@@ -569,6 +569,18 @@ export function startNewGame(
 }
 
 /**
+ * Restart strictly from Level 1 (0 followers, fresh score) after Game Over so
+ * players must climb back through the mountain to earn higher-level badges.
+ */
+export function restartAfterGameOver(
+  state: SimulationState,
+  targetPhase: GamePhase = 'playing',
+  seed?: number,
+): void {
+  startNewGame(state, targetPhase, seed);
+}
+
+/**
  * Retry the current level cleanly:
  * - Never adds a Yeti; strictly restores active followers to (levelNumber - 1).
  * - Resets obstacle hit flags, jump/grab state, distance, speed, timers, and avalanche.
