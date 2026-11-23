@@ -227,7 +227,7 @@ export function WalletConnectModal({
           </p>
           <div className="flex flex-wrap gap-1.5">
             {[
-              { name: 'Phantom', url: 'https://phantom.app/' },
+              { name: 'Backpack', url: 'https://backpack.app/' },
               { name: 'Nightly', url: 'https://nightly.app/' },
               { name: 'OKX Wallet', url: 'https://www.okx.com/web3' },
               { name: 'Surf', url: 'https://surf.tech/' },
