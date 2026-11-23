@@ -925,6 +925,7 @@ export function ProfileModal({
                   maxLength={MAX_USERNAME_LENGTH}
                   value={usernameDraft}
                   onChange={(e) => setUsernameDraft(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
                   placeholder={UI_COPY.wallet.usernamePlaceholder}
                   disabled={loading || busyAction !== null}
                   data-testid="input-profile-username"
