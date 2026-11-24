@@ -6,7 +6,7 @@
 
 **Lofi Ice Escape** is a 3D browser snowboarding game built for the **Sui** ecosystem (**CLAY Hackathon III**). Play as **Lofi** and lead your growing crew of **Lil Yetis** down alpine slopes, carving past obstacles, hitting optional ramps, controlling speed on steep descents, and outrunning the avalanche to reach the warm **Shelter**.
 
-- **Live Demo:** https://lofi-ice-escape.vercel.app
+- **Live Demo:** https://lofiescape.fun
 - **Demo Mode:** Playable immediately with no wallet required.
 - **Sui Integration:** Optional Sui Wallet connection (Nightly, Slush, Backpack, OKX, Surf) for Rider Profile, Daily Check-In, 7 Claimable Badges, and Leaderboard.
 
