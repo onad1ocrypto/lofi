@@ -8,7 +8,7 @@
 
 - **Live Demo:** https://lofiescape.fun
 - **Demo Mode:** Playable immediately with no wallet required.
-- **Sui Integration:** Optional Sui Wallet connection (Nightly, Slush, Backpack, OKX, Surf) for Rider Profile, Daily Check-In, 7 Claimable Badges, and Leaderboard.
+- **Sui Integration:** Optional Sui Wallet connection (Nightly, Slush, Backpack, OKX) for Rider Profile, Daily Check-In, 7 Claimable Badges, and Leaderboard.
 
 ---
 

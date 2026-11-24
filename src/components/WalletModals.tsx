@@ -320,7 +320,6 @@ export function WalletConnectModal({
               { name: 'Backpack', url: 'https://backpack.app/' },
               { name: 'Nightly', url: 'https://nightly.app/' },
               { name: 'OKX Wallet', url: 'https://www.okx.com/web3' },
-              { name: 'Surf', url: 'https://surf.tech/' },
               { name: 'Slush', url: 'https://slush.app/' },
             ]
               .filter(
