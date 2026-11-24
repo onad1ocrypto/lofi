@@ -25,6 +25,32 @@
 
 ---
 
+## Rider Avatars
+
+Connect any Sui Wallet to choose your rider avatar and set your verified username:
+
+| Goggles | Beanie | Shades | Headphones |
+| :---: | :---: | :---: | :---: |
+| <img src="public/assets/aistudio/lofi-avatar-1-goggles_439b2dfb.png" width="120" alt="Lofi Goggles" /> | <img src="public/assets/aistudio/lofi-avatar-2-beanie_4742f5df.png" width="120" alt="Lofi Beanie" /> | <img src="public/assets/aistudio/lofi-avatar-3-shades_b89ea6c1.png" width="120" alt="Lofi Shades" /> | <img src="public/assets/aistudio/lofi-avatar-4-headphones_24b7e03f.png" width="120" alt="Lofi Headphones" /> |
+
+---
+
+## 7 Claimable Sui Badges
+
+Complete in-game milestones and claim each badge via `sui:signPersonalMessage`:
+
+| Badge | Name | Unlock Requirement |
+| :---: |---|---|
+| <img src="public/assets/aistudio/lofi-badge-new-player__1_-removebg-preview_11abffc7.png" width="64" alt="New User Verified" /> | **New User Verified** | Connect Sui wallet & save username |
+| <img src="public/assets/aistudio/lofi-badge-example__1_-removebg-preview_f18f842a.png" width="64" alt="First Shelter" /> | **First Shelter** | Complete Level 1 solo |
+| <img src="public/assets/aistudio/lofi-badge-growing-crew-removebg-preview_15809afa.png" width="64" alt="Growing Crew" /> | **Growing Crew** | Complete Level 3 (*First Drop*) |
+| <img src="public/assets/aistudio/lofi-badge-carving-master-removebg-preview_7c79957f.png" width="64" alt="Carving Master" /> | **Carving Master** | Complete Level 4 (*Carving Pass*) |
+| <img src="public/assets/aistudio/lofi-badge-airborne-yeti-removebg-preview_6c0022f5.png" width="64" alt="Airborne Yeti" /> | **Airborne Yeti** | Complete Level 5 (*Drop & Jump*) |
+| <img src="public/assets/aistudio/lofi-badge-slalom-pro-removebg-preview_6fc2a744.png" width="64" alt="Slalom Pro" /> | **Slalom Pro** | Complete Level 6 (*Pine Slalom*) |
+| <img src="public/assets/aistudio/lofi-badge-summit-champion__1_-removebg-preview_b49ee6b7.png" width="64" alt="Summit Champion" /> | **Summit Champion** | Complete Level 10 (*Summit Run*) with all 9 Lil Yetis |
+
+---
+
 ## Controls
 
 | Action | Desktop | Mobile |
@@ -52,29 +78,11 @@ Every completed level recruits **1 new Lil Yeti** at the Shelter to join your cr
 
 ---
 
-## Sui Wallet Features
-
-- **Demo Mode:** Full 10-level gameplay and continuous 3-track EDM soundtrack without a wallet.
-- **Wallet Login (Wallet Standard):** Connect with **Nightly**, **Slush**, **Backpack**, **OKX Wallet**, or **Surf**.
-- **Rider Profile:** Choose from 4 Lofi avatars, set a rider username (verified via `sui:signPersonalMessage`), and track progress.
-- **Daily Check-In:** Sign daily with your Sui wallet to build your **Streak Fire** and earn points.
-- **7 Claimable Badges:**
-  1. **New User Verified** — Connect wallet & save username
-  2. **First Shelter** — Complete Level 1
-  3. **Growing Crew** — Complete Level 3
-  4. **Carving Master** — Complete Level 4
-  5. **Airborne Yeti** — Complete Level 5
-  6. **Slalom Pro** — Complete Level 6
-  7. **Summit Champion** — Complete Level 10
-- **Leaderboard:** Top 10 riders ranked by highest level, points, and badges claimed.
-
----
-
 ## Tech Stack
 
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v4
 - **3D Engine:** Three.js
-- **Blockchain:** Sui Wallet Standard (`@mysten/sui` / `sui:signPersonalMessage`), Sui Testnet RPC (`VITE_SUI_RPC_URL`)
+- **Blockchain:** Sui Wallet Standard (`sui:signPersonalMessage`), Sui Testnet RPC (`VITE_SUI_RPC_URL`)
 
 ---
 
