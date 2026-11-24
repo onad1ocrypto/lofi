@@ -25,6 +25,15 @@
 
 ---
 
+## Characters
+
+| Lofi (Hero) | Lil Yeti (Crew) |
+| :---: | :---: |
+| <img src="public/assets/outcome/lofi-victory-alpha.png" width="180" alt="Lofi Snowboarder Hero" /> | <img src="public/assets/outcome/small-yeti-alpha.png" width="150" alt="Lil Yeti Companion" /> |
+| Official-style Lofi in orange & navy snowboard gear | Recruited at the Shelter after each completed level |
+
+---
+
 ## Rider Avatars
 
 Connect any Sui Wallet to choose your rider avatar and set your verified username:
